@@ -421,6 +421,9 @@ namespace melatonin
             if (method == "describe")
                 return describe (params);
 
+            if (method == "windows")
+                return windows();
+
             if (method == "screenshot")
                 return screenshot (params);
 
@@ -494,11 +497,27 @@ namespace melatonin
                                                      { "richInput", true },
                                                      { "screenshots", true },
                                                      { "tracing", false },
-                                                     { "windows", false } }) },
+                                                     { "windows", true } }) },
                              { "security", object ({ { "allowInput", options.allowInput },
                                                      { "allowMutation", options.allowMutation },
                                                      { "allowFileWrite", options.allowFileWrite },
                                                      { "artifactRoot", options.artifactRoot.getFullPathName() } }) } });
+        }
+
+        juce::var windows() const
+        {
+            juce::Array<juce::var> result;
+
+            if (root != nullptr)
+            {
+                result.add (object ({ { "id", "root" },
+                                      { "title", componentString (root.getComponent()) },
+                                      { "root", componentString (root.getComponent()) },
+                                      { "focused", root->hasKeyboardFocus (true) },
+                                      { "bounds", rectangleToVar (root->getScreenBounds()) } }));
+            }
+
+            return object ({ { "windows", result } });
         }
 
         juce::var snapshot (juce::DynamicObject& params)

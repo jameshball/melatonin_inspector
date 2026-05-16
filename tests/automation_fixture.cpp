@@ -301,6 +301,12 @@ namespace
             require (security.getProperty ("artifactRoot").toString() == screenshotDirectory.getFullPathName(),
                      "capabilities returned the wrong artifact root");
 
+            auto windows = juce::JSON::parse (runCli ({ "-s", sessionName, "windows" }));
+            auto windowsArray = asObject (windows, "windows").getProperty ("windows");
+            require (windowsArray.isArray() && windowsArray.getArray()->size() == 1, "windows should expose the owned root window");
+            require (asObject (windowsArray.getArray()->getReference (0), "root window").getProperty ("id").toString() == "root",
+                     "root window id should be root");
+
             auto snapshotAgain = readSnapshot();
             auto& snapshotObject = asObject (snapshot, "snapshot");
             auto& snapshotAgainObject = asObject (snapshotAgain, "snapshotAgain");

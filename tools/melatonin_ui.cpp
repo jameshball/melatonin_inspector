@@ -363,6 +363,9 @@ namespace
             tool ("juce_list_sessions",
                   "List running melatonin_inspector automation sessions.",
                   toolSchema ({})),
+            tool ("juce_windows",
+                  "List automation-owned JUCE windows for a session.",
+                  toolSchema ({ { "session", stringSchema() } })),
             tool ("juce_capabilities",
                   "Return protocol, feature, and security capabilities for a running automation session.",
                   toolSchema ({ { "session", stringSchema() } })),
@@ -490,6 +493,7 @@ namespace
         if (name == "juce_wait_for_text") return "wait_for_text";
         if (name == "juce_wait_for_value") return "wait_for_value";
         if (name == "juce_wait_for_snapshot_change") return "wait_for_snapshot_change";
+        if (name == "juce_windows") return "windows";
 
         return {};
     }
@@ -697,6 +701,7 @@ namespace
             << "  melatonin-ui list\n"
             << "  melatonin-ui mcp\n"
             << "  melatonin-ui -s <session> capabilities\n"
+            << "  melatonin-ui -s <session> windows\n"
             << "  melatonin-ui -s <session> locator [--role role] [--name text] [--text text] [--format json]\n"
             << "  melatonin-ui -s <session> snapshot [--format text|json] [--depth n]\n"
             << "  melatonin-ui -s <session> screenshot [--target root|--ref m1-1] --file /tmp/root.png\n"
@@ -809,6 +814,12 @@ int main (int argc, char* argv[])
         if (command == "capabilities")
         {
             printResult (request (*sessionObject, "capabilities", emptyObject()), true);
+            return 0;
+        }
+
+        if (command == "windows")
+        {
+            printResult (request (*sessionObject, "windows", emptyObject()), true);
             return 0;
         }
 
