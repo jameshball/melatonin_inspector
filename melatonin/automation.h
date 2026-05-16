@@ -217,12 +217,7 @@ namespace melatonin
             if (paramsObject == nullptr)
                 paramsObject = &emptyParams;
 
-            if (method == "wait")
-                sleepUntilReadyOrStopped (juce::jlimit (0, 30000, getInt (*paramsObject, "ms", 250)));
-
-            auto result = callOnMessageThread ([this, method, paramsObject]() {
-                return dispatch (method, *paramsObject);
-            });
+            auto result = dispatchRequest (method, *paramsObject);
 
             if (auto* resultObject = result.getDynamicObject())
             {
@@ -233,6 +228,63 @@ namespace melatonin
             }
 
             return responseOk (id, result);
+        }
+
+        juce::var dispatchRequest (const juce::String& method, juce::DynamicObject& params)
+        {
+            if (method == "wait")
+                sleepUntilReadyOrStopped (juce::jlimit (0, 30000, getInt (params, "ms", 250)));
+
+            if (!isAutoWaitMethod (method))
+                return callOnMessageThread ([this, method, &params]() {
+                    return dispatch (method, params);
+                });
+
+            const auto deadline = juce::Time::currentTimeMillis() + juce::jlimit (0, 30000, getInt (params, "timeoutMs", 0));
+            juce::var lastResult;
+
+            do
+            {
+                lastResult = callOnMessageThread ([this, method, &params]() {
+                    return dispatch (method, params);
+                });
+
+                if (!isRetryableActionabilityError (lastResult))
+                    return lastResult;
+
+                sleepUntilReadyOrStopped (50);
+            } while (juce::Time::currentTimeMillis() < deadline && !threadShouldExit());
+
+            if (auto* errorObject = lastResult.getDynamicObject())
+                return error ("operation_timeout", "Timed out waiting for actionability: " + errorObject->getProperty ("message").toString());
+
+            return error ("operation_timeout", "Timed out waiting for actionability.");
+        }
+
+        static bool isAutoWaitMethod (const juce::String& method)
+        {
+            return method == "click"
+                   || method == "type"
+                   || method == "press"
+                   || method == "drag"
+                   || method == "screenshot"
+                   || method == "set_bounds"
+                   || method == "set_property";
+        }
+
+        static bool isRetryableActionabilityError (const juce::var& result)
+        {
+            auto* resultObject = result.getDynamicObject();
+
+            if (resultObject == nullptr || !resultObject->getProperty ("__error").isString())
+                return false;
+
+            auto code = resultObject->getProperty ("__error").toString();
+            return code == "locator_not_found"
+                   || code == "target_not_showing"
+                   || code == "target_disabled"
+                   || code == "target_empty_bounds"
+                   || code == "target_not_receiving_events";
         }
 
         juce::var dispatch (const juce::String& method, juce::DynamicObject& params)
@@ -290,7 +342,7 @@ namespace melatonin
             return object ({ { "protocolVersion", protocolVersion },
                              { "session", options.sessionName },
                              { "features", object ({ { "locators", true },
-                                                     { "actionability", false },
+                                                     { "actionability", true },
                                                      { "semanticControls", false },
                                                      { "richInput", false },
                                                      { "screenshots", true },
@@ -471,8 +523,11 @@ namespace melatonin
 
             auto* target = resolution.component;
 
-            if (auto validationError = validateInputTarget (*target); !validationError.isVoid())
+            if (auto validationError = validateInputTarget (*target, params); !validationError.isVoid())
                 return validationError;
+
+            if (isTrial (params))
+                return actionabilityResult (*target);
 
             activateComponent (*target);
             return snapshotAfterAction();
@@ -518,8 +573,11 @@ namespace melatonin
 
             auto* target = resolution.component;
 
-            if (auto validationError = validateInputTarget (*target); !validationError.isVoid())
+            if (auto validationError = validateInputTarget (*target, params); !validationError.isVoid())
                 return validationError;
+
+            if (isTrial (params))
+                return actionabilityResult (*target);
 
             target->grabKeyboardFocus();
             const auto text = getString (params, "text", {});
@@ -561,8 +619,11 @@ namespace melatonin
 
             if (target != nullptr)
             {
-                if (auto validationError = validateInputTarget (*target); !validationError.isVoid())
+                if (auto validationError = validateInputTarget (*target, params); !validationError.isVoid())
                     return validationError;
+
+                if (isTrial (params))
+                    return actionabilityResult (*target);
 
                 target->grabKeyboardFocus();
             }
@@ -596,8 +657,11 @@ namespace melatonin
 
             auto* target = resolution.component;
 
-            if (auto validationError = validateInputTarget (*target); !validationError.isVoid())
+            if (auto validationError = validateInputTarget (*target, params); !validationError.isVoid())
                 return validationError;
+
+            if (isTrial (params))
+                return actionabilityResult (*target);
 
             auto start = getRootBounds (*target).getCentre();
             auto end = start.translated (getInt (params, "dx", 0), getInt (params, "dy", 0));
@@ -991,15 +1055,53 @@ namespace melatonin
             synthesizeClickAt (bounds.getCentre());
         }
 
-        juce::var validateInputTarget (juce::Component& target) const
+        juce::var validateInputTarget (juce::Component& target, juce::DynamicObject& params) const
         {
+            if ((bool) params.getProperty ("force"))
+                return {};
+
             if (!target.isShowing())
                 return error ("target_not_showing", "Target component is not showing.");
 
             if (!target.isEnabled())
                 return error ("target_disabled", "Target component is disabled.");
 
+            if (getRootBounds (target).isEmpty())
+                return error ("target_empty_bounds", "Target component has empty bounds.");
+
+            if (!receivesEvents (target))
+                return error ("target_not_receiving_events", "Target component does not receive pointer events at its center.");
+
             return {};
+        }
+
+        static bool isTrial (juce::DynamicObject& params)
+        {
+            return (bool) params.getProperty ("trial");
+        }
+
+        juce::var actionabilityResult (juce::Component& target) const
+        {
+            return object ({ { "actionability", object ({ { "attached", true },
+                                                          { "visible", target.isShowing() },
+                                                          { "enabled", target.isEnabled() },
+                                                          { "nonEmptyBounds", !getRootBounds (target).isEmpty() },
+                                                          { "receivesEvents", receivesEvents (target) } }) } });
+        }
+
+        bool receivesEvents (juce::Component& target) const
+        {
+            if (root == nullptr)
+                return false;
+
+            auto rootBounds = getRootBounds (target);
+
+            if (rootBounds.isEmpty())
+                return false;
+
+            auto* found = findComponentAt (*root, rootBounds.getCentre());
+
+            return found == &target || (found != nullptr && target.isParentOf (found));
         }
 
         void synthesizeDragOn (juce::Component& target, juce::Point<int> rootStart, juce::Point<int> rootEnd)

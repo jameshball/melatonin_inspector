@@ -268,6 +268,20 @@ namespace
             params.setProperty ("locator", locator);
     }
 
+    void addActionOptions (juce::StringArray& args, juce::DynamicObject& params)
+    {
+        auto timeout = optionValue (args, "--timeout-ms", optionValue (args, "--timeout"));
+
+        if (timeout.isNotEmpty())
+            params.setProperty ("timeoutMs", timeout.getIntValue());
+
+        if (hasFlag (args, "--force"))
+            params.setProperty ("force", true);
+
+        if (hasFlag (args, "--trial"))
+            params.setProperty ("trial", true);
+    }
+
     juce::var object (std::initializer_list<std::pair<juce::String, juce::var>> properties)
     {
         auto* result = new juce::DynamicObject();
@@ -733,6 +747,7 @@ int main (int argc, char* argv[])
             auto target = optionValue (args, "--target", "root");
             auto locator = parseLocatorOptions (args);
             auto params = object ({ { "file", file }, { "ref", ref }, { "target", target } });
+            addActionOptions (args, *params.getDynamicObject());
             addLocatorIfPresent (*params.getDynamicObject(), locator);
             auto result = request (*sessionObject, "screenshot", params);
             printResult (result);
@@ -741,8 +756,13 @@ int main (int argc, char* argv[])
 
         if (command == "click")
         {
+            juce::DynamicObject tempParams;
+            addActionOptions (args, tempParams);
             auto locator = parseLocatorOptions (args);
             auto params = object ({ { "ref", args.size() >= 1 ? args[0] : juce::String() } });
+            params.getDynamicObject()->setProperty ("timeoutMs", tempParams.getProperty ("timeoutMs"));
+            params.getDynamicObject()->setProperty ("force", tempParams.getProperty ("force"));
+            params.getDynamicObject()->setProperty ("trial", tempParams.getProperty ("trial"));
             addLocatorIfPresent (*params.getDynamicObject(), locator);
             printResult (request (*sessionObject, "click", params));
             return 0;
@@ -756,9 +776,14 @@ int main (int argc, char* argv[])
 
         if (command == "type")
         {
+            juce::DynamicObject tempParams;
+            addActionOptions (args, tempParams);
             auto locator = parseLocatorOptions (args);
             auto ref = !locator.isVoid() ? juce::String() : popFront (args);
             auto params = object ({ { "ref", ref }, { "text", args.joinIntoString (" ") } });
+            params.getDynamicObject()->setProperty ("timeoutMs", tempParams.getProperty ("timeoutMs"));
+            params.getDynamicObject()->setProperty ("force", tempParams.getProperty ("force"));
+            params.getDynamicObject()->setProperty ("trial", tempParams.getProperty ("trial"));
             addLocatorIfPresent (*params.getDynamicObject(), locator);
             printResult (request (*sessionObject, "type", params));
             return 0;
@@ -767,8 +792,13 @@ int main (int argc, char* argv[])
         if (command == "press" && args.size() >= 1)
         {
             auto ref = optionValue (args, "--ref");
+            juce::DynamicObject tempParams;
+            addActionOptions (args, tempParams);
             auto locator = parseLocatorOptions (args);
             auto params = object ({ { "key", args[0] }, { "ref", ref } });
+            params.getDynamicObject()->setProperty ("timeoutMs", tempParams.getProperty ("timeoutMs"));
+            params.getDynamicObject()->setProperty ("force", tempParams.getProperty ("force"));
+            params.getDynamicObject()->setProperty ("trial", tempParams.getProperty ("trial"));
             addLocatorIfPresent (*params.getDynamicObject(), locator);
             printResult (request (*sessionObject, "press", params));
             return 0;
@@ -778,8 +808,13 @@ int main (int argc, char* argv[])
         {
             auto dx = optionValue (args, "--dx", "0").getIntValue();
             auto dy = optionValue (args, "--dy", "0").getIntValue();
+            juce::DynamicObject tempParams;
+            addActionOptions (args, tempParams);
             auto locator = parseLocatorOptions (args);
             auto params = object ({ { "ref", args.size() >= 1 ? args[0] : juce::String() }, { "dx", dx }, { "dy", dy } });
+            params.getDynamicObject()->setProperty ("timeoutMs", tempParams.getProperty ("timeoutMs"));
+            params.getDynamicObject()->setProperty ("force", tempParams.getProperty ("force"));
+            params.getDynamicObject()->setProperty ("trial", tempParams.getProperty ("trial"));
             addLocatorIfPresent (*params.getDynamicObject(), locator);
             printResult (request (*sessionObject, "drag", params));
             return 0;
@@ -791,8 +826,13 @@ int main (int argc, char* argv[])
             auto y = optionValue (args, "--y", "0").getIntValue();
             auto w = optionValue (args, "--w", "0").getIntValue();
             auto h = optionValue (args, "--h", "0").getIntValue();
+            juce::DynamicObject tempParams;
+            addActionOptions (args, tempParams);
             auto locator = parseLocatorOptions (args);
             auto params = object ({ { "ref", args.size() >= 1 ? args[0] : juce::String() }, { "x", x }, { "y", y }, { "w", w }, { "h", h } });
+            params.getDynamicObject()->setProperty ("timeoutMs", tempParams.getProperty ("timeoutMs"));
+            params.getDynamicObject()->setProperty ("force", tempParams.getProperty ("force"));
+            params.getDynamicObject()->setProperty ("trial", tempParams.getProperty ("trial"));
             addLocatorIfPresent (*params.getDynamicObject(), locator);
             printResult (request (*sessionObject, "set_bounds", params));
             return 0;
@@ -800,6 +840,8 @@ int main (int argc, char* argv[])
 
         if (command == "set-property")
         {
+            juce::DynamicObject tempParams;
+            addActionOptions (args, tempParams);
             auto locator = parseLocatorOptions (args);
             auto ref = !locator.isVoid() ? juce::String() : popFront (args);
 
@@ -807,6 +849,9 @@ int main (int argc, char* argv[])
                 throw std::runtime_error ("set-property requires a property name and value");
 
             auto params = object ({ { "ref", ref }, { "name", args[0] }, { "value", parseValue (args[1]) } });
+            params.getDynamicObject()->setProperty ("timeoutMs", tempParams.getProperty ("timeoutMs"));
+            params.getDynamicObject()->setProperty ("force", tempParams.getProperty ("force"));
+            params.getDynamicObject()->setProperty ("trial", tempParams.getProperty ("trial"));
             addLocatorIfPresent (*params.getDynamicObject(), locator);
             printResult (request (*sessionObject, "set_property", params));
             return 0;

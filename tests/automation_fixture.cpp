@@ -335,6 +335,17 @@ namespace
             require ((int) asObject (disabledLocator, "disabled locator").getProperty ("count") == 1,
                      "disabled locator did not find controls.disabled");
 
+            auto disabledClick = runCliExpectFailure ({ "-s", sessionName, "click", "--component-name", "controls.disabled", "--timeout-ms", "100" });
+            require (disabledClick.contains ("target_disabled") || disabledClick.contains ("disabled"),
+                     "disabled target should fail actionability\n" + disabledClick);
+
+            auto trialClick = runCli ({ "-s", sessionName, "click", "--component-name", "nav.editor", "--trial" });
+            require (trialClick.contains ("actionability"), "trial click should report actionability without executing\n" + trialClick);
+
+            auto stillHiddenLocator = readLocator ({ "--component-name", "editor.text", "--hidden" });
+            require ((int) asObject (stillHiddenLocator, "still hidden locator").getProperty ("count") == 1,
+                     "trial click should not navigate to the editor page");
+
             auto strictFailure = runCliExpectFailure ({ "-s", sessionName, "click", "--role", "button", "--name", "Duplicate" });
             require (strictFailure.contains ("strict") || strictFailure.contains ("matched 2"),
                      "duplicate locator should fail strict mode\n" + strictFailure);
