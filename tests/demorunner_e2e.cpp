@@ -1,5 +1,6 @@
 #include <JuceHeader.h>
 
+#include <cmath>
 #include <functional>
 #include <iostream>
 #include <set>
@@ -410,6 +411,11 @@ namespace
                      (int) boundsObject.getProperty ("h") };
         }
 
+        static int nodeInt (const juce::var& node, const juce::Identifier& property)
+        {
+            return (int) asObject (node, "node").getProperty (property);
+        }
+
         static bool isVisible (juce::DynamicObject& node)
         {
             return (bool) node.getProperty ("visible");
@@ -433,6 +439,17 @@ namespace
         {
             return findSnapshotNode (snapshot, className, [&] (juce::DynamicObject& node) {
                 return isVisible (node) && hasClass (node, className);
+            });
+        }
+
+        juce::var visibleNodeContainingText (const juce::var& snapshot, const juce::String& text)
+        {
+            return findSnapshotNode (snapshot, text, [&] (juce::DynamicObject& node) {
+                const auto haystack = node.getProperty ("name").toString()
+                                      + " " + node.getProperty ("title").toString()
+                                      + " " + node.getProperty ("value").toString();
+
+                return isVisible (node) && haystack.contains (text);
             });
         }
 
@@ -467,12 +484,25 @@ namespace
 
         void scrollListItemIntoView (const juce::String& name)
         {
+            tryRunCli ({ "-s", sessionName, "select-option", "--class", "juce::ListBox", "--exact", "--text", name, "--timeout-ms", "1000" }, 3000);
+
+            for (int listIndex = 0; listIndex < 4; ++listIndex)
+            {
+                tryRunCli ({ "-s", sessionName, "select-option", "--class", "juce::ListBox", "--exact", "--nth", juce::String (listIndex), "--text", name, "--timeout-ms", "1000" }, 3000);
+
+                if (tryRunCli ({ "-s", sessionName, "wait-for-locator", "--role", "listItem", "--name", name, "--exact", "--timeout-ms", "300" }, 1000))
+                    return;
+            }
+
+            if (tryRunCli ({ "-s", sessionName, "wait-for-locator", "--role", "listItem", "--name", name, "--exact", "--timeout-ms", "300" }, 1000))
+                return;
+
             for (int attempt = 0; attempt < 80; ++attempt)
             {
                 if (tryRunCli ({ "-s", sessionName, "wait-for-locator", "--role", "listItem", "--name", name, "--exact", "--timeout-ms", "300" }, 1000))
                     return;
 
-                runCli ({ "-s", sessionName, "wheel", "231", "300", "--dy", "-12" });
+                runCli ({ "-s", sessionName, "wheel", "231", "300", "--dy", attempt < 40 ? "-12" : "12" });
                 runCli ({ "-s", sessionName, "wait", "--ms", "100" });
             }
 
@@ -515,6 +545,29 @@ namespace
             selectTopLevelTab ("Demo");
         }
 
+        void selectDemoLocalTab (const juce::String& tabName)
+        {
+            auto tabs = visibleNodeByClass (readSnapshot (8), "DemoTabbedComponent");
+            runCli ({ "-s", sessionName, "select-tab", nodeRef (tabs), "--name", tabName });
+            runCli ({ "-s", sessionName, "wait", "--ms", "250" });
+        }
+
+        void clickWindowPoint (juce::Rectangle<int> bounds, int relativeX, int relativeY, const juce::String& target = "root")
+        {
+            runCli ({ "-s", sessionName, "click-xy",
+                      juce::String (bounds.getX() + relativeX),
+                      juce::String (bounds.getY() + relativeY),
+                      "--target", target });
+        }
+
+        void clickVisibleText (const juce::String& text)
+        {
+            auto node = visibleNodeContainingText (readSnapshot (10), text);
+            auto bounds = boundsOf (node);
+            clickWindowPoint (bounds, bounds.getWidth() / 2, bounds.getHeight() / 2);
+            runCli ({ "-s", sessionName, "wait", "--ms", "250" });
+        }
+
         struct DemoCase
         {
             enum class Exercise
@@ -530,7 +583,14 @@ namespace
                 gain,
                 valueTrees,
                 xmlAndJson,
-                openGL
+                openGL,
+                widgets,
+                menus,
+                windows,
+                mdi,
+                properties,
+                keyMappings,
+                openGL2D
             };
 
             const char* category = nullptr;
@@ -549,11 +609,18 @@ namespace
                 { "GUI", "GridDemo.h",                "grid-demo.png", DemoCase::Exercise::grid },
                 { "GUI", "ImagesDemo.h",              "images-demo.png", DemoCase::Exercise::images },
                 { "GUI", "FontsDemo.h",               "fonts-demo.png", DemoCase::Exercise::fonts },
+                { "GUI", "WidgetsDemo.h",             "widgets-demo.png", DemoCase::Exercise::widgets },
+                { "GUI", "MenusDemo.h",               "menus-demo.png", DemoCase::Exercise::menus },
+                { "GUI", "WindowsDemo.h",             "windows-demo.png", DemoCase::Exercise::windows },
+                { "GUI", "MDIDemo.h",                 "mdi-demo.png", DemoCase::Exercise::mdi },
+                { "GUI", "PropertiesDemo.h",          "properties-demo.png", DemoCase::Exercise::properties },
+                { "GUI", "KeyMappingsDemo.h",         "key-mappings-demo.png", DemoCase::Exercise::keyMappings },
                 { "Audio", "AudioSettingsDemo.h",     "audio-settings-demo.png", DemoCase::Exercise::audioSettings },
                 { "DSP", "GainDemo.h",                "gain-demo.png", DemoCase::Exercise::gain },
                 { "Utilities", "ValueTreesDemo.h",    "value-trees-demo.png", DemoCase::Exercise::valueTrees },
                 { "Utilities", "XMLandJSONDemo.h",    "xml-and-json-demo.png", DemoCase::Exercise::xmlAndJson },
-                { "GUI", "OpenGLDemo.h",              "opengl-demo.png", DemoCase::Exercise::openGL }
+                { "GUI", "OpenGLDemo.h",              "opengl-demo.png", DemoCase::Exercise::openGL },
+                { "GUI", "OpenGLDemo2D.h",            "opengl-2d-demo.png", DemoCase::Exercise::openGL2D }
             };
 
             for (const auto& demo : demos)
@@ -581,6 +648,13 @@ namespace
                 case DemoCase::Exercise::valueTrees:           exerciseValueTreesDemo(); break;
                 case DemoCase::Exercise::xmlAndJson:           exerciseXmlAndJsonDemo(); break;
                 case DemoCase::Exercise::openGL:               exerciseOpenGLDemo(); break;
+                case DemoCase::Exercise::widgets:              exerciseWidgetsDemo(); break;
+                case DemoCase::Exercise::menus:                exerciseMenusDemo(); break;
+                case DemoCase::Exercise::windows:              exerciseWindowsDemo(); break;
+                case DemoCase::Exercise::mdi:                  exerciseMdiDemo(); break;
+                case DemoCase::Exercise::properties:           exercisePropertiesDemo(); break;
+                case DemoCase::Exercise::keyMappings:          exerciseKeyMappingsDemo(); break;
+                case DemoCase::Exercise::openGL2D:             exerciseOpenGL2DDemo(); break;
             }
         }
 
@@ -709,6 +783,200 @@ namespace
             captureScreenshot ("fonts-after-controls.png");
         }
 
+        void exerciseWidgetsDemo()
+        {
+            runCli ({ "-s", sessionName, "wait-for-locator", "--class", "DemoTabbedComponent", "--visible", "--timeout-ms", "3000" });
+
+            runCli ({ "-s", sessionName, "check", "--role", "radioButton", "--name", "Radio Button #3", "--exact", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "wait-for-value", "--role", "radioButton", "--name", "Radio Button #3", "--exact", "--value", "true", "--timeout-ms", "3000" });
+            captureScreenshot ("widgets-buttons-after-radio.png");
+
+            selectDemoLocalTab ("Sliders");
+            runCli ({ "-s", sessionName, "set-value", "--role", "slider", "--nth", "0", "25" });
+            runCli ({ "-s", sessionName, "wait-for-value", "--role", "slider", "--nth", "0", "--value", "25", "--timeout-ms", "3000" });
+            captureScreenshot ("widgets-sliders-before-drag.png");
+            auto slider = firstLocatorMatch ({ "--role", "slider", "--nth", "2", "--visible" },
+                                             "Widgets horizontal slider");
+            const auto beforeSliderValue = asObject (slider, "Widgets horizontal slider").getProperty ("value").toString().getDoubleValue();
+            runCli ({ "-s", sessionName, "drag", nodeRef (slider), "--dx", "90", "--dy", "0", "--steps", "5" });
+            auto draggedSlider = firstLocatorMatch ({ "--role", "slider", "--nth", "2", "--visible" },
+                                                    "Widgets dragged horizontal slider");
+            const auto afterSliderValue = asObject (draggedSlider, "Widgets dragged horizontal slider").getProperty ("value").toString().getDoubleValue();
+            require (std::abs (afterSliderValue - beforeSliderValue) > 0.001, "Widgets horizontal slider drag did not change its semantic value");
+            captureScreenshot ("widgets-sliders-after-drag.png");
+
+            selectDemoLocalTab ("Toolbars");
+            runCli ({ "-s", sessionName, "set-value", "--role", "slider", "--nth", "0", "90" });
+            runCli ({ "-s", sessionName, "wait-for-value", "--role", "slider", "--nth", "0", "--value", "90", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "click", "--role", "button", "--name", "Vertical/Horizontal", "--exact", "--timeout-ms", "3000" });
+            captureScreenshot ("widgets-toolbar-after-orientation.png");
+
+            selectDemoLocalTab ("Misc");
+            runCli ({ "-s", sessionName, "fill", "--role", "editableText", "--value", "Single-line text box", "--exact", "Automation widgets misc" });
+            runCli ({ "-s", sessionName, "wait-for-value", "--role", "editableText", "--nth", "0", "--value", "Automation widgets misc", "--exact", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "select-option", "--role", "comboBox", "--value", "combo box item 1", "--exact", "--text", "combo box item 4" });
+            runCli ({ "-s", sessionName, "wait-for-value", "--role", "comboBox", "--value", "combo box item 4", "--exact", "--timeout-ms", "3000" });
+            captureScreenshot ("widgets-misc-after-edit.png");
+
+            selectDemoLocalTab ("Menus");
+            runCli ({ "-s", sessionName, "click", "--role", "button", "--name", "Short", "--exact", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "wait-for-locator", "--role", "menuItem", "--name", "Single Item", "--exact", "--visible", "--timeout-ms", "3000" });
+            captureScreenshot ("widgets-popup-menu.png");
+            runCli ({ "-s", sessionName, "press", "escape", "--timeout-ms", "3000" });
+
+            selectDemoLocalTab ("Tables");
+            runCli ({ "-s", sessionName, "select-option", "--class", "TableListBox", "--nth", "0", "--index", "2", "--timeout-ms", "3000" });
+            auto table = findSnapshotNode (readSnapshot (8), "Widgets table", [] (juce::DynamicObject& node) {
+                return isVisible (node) && hasClass (node, "TableListBox");
+            });
+            require (nodeInt (table, "selectedRow") == 2, "Widgets table did not select row 2");
+            captureScreenshot ("widgets-table-after-select.png");
+
+            selectDemoLocalTab ("Drag & Drop");
+            auto dragBefore = captureScreenshot ("widgets-dragdrop-before.png");
+            auto sourceList = firstLocatorMatch ({ "--class", "ListBox", "--nth", "0", "--visible" },
+                                                 "Widgets drag source list");
+            auto target = firstLocatorMatch ({ "--class", "DragAndDropDemoTarget", "--nth", "0", "--visible" },
+                                             "Widgets drag target");
+            auto sourceBounds = boundsOf (sourceList);
+            auto targetBounds = boundsOf (target);
+            runCli ({ "-s", sessionName, "drag-xy",
+                      juce::String (sourceBounds.getX() + 35),
+                      juce::String (sourceBounds.getY() + 18),
+                      juce::String (targetBounds.getCentreX()),
+                      juce::String (targetBounds.getCentreY()),
+                      "--steps", "8" });
+            auto dragAfter = captureScreenshot ("widgets-dragdrop-after.png");
+            assertScreenshotsDiffer (dragBefore, dragAfter, "Widgets drag-and-drop", 4);
+        }
+
+        void exerciseMenusDemo()
+        {
+            runCli ({ "-s", sessionName, "wait-for-text", "Menu Position", "--timeout-ms", "3000" });
+
+            auto before = captureScreenshot ("menus-before-popup.png");
+            runCli ({ "-s", sessionName, "press", "command+g", "--class", "MenusDemo", "--exact", "--force", "--timeout-ms", "3000" });
+            auto afterOuter = captureScreenshot ("menus-after-outer-green.png");
+            assertScreenshotsDiffer (before, afterOuter, "Menus outer colour command");
+
+            runCli ({ "-s", sessionName, "press", "shift+command+r", "--class", "MenusDemo", "--exact", "--force", "--timeout-ms", "3000" });
+            captureScreenshot ("menus-after-inner-red.png");
+        }
+
+        void exerciseWindowsDemo()
+        {
+            const auto initialWindowCount = windowCount();
+            runCli ({ "-s", sessionName, "click", "--role", "button", "--name", "Show Windows", "--exact", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "wait-for-text", "Dialog Windows can be used", "--timeout-ms", "3000" });
+            require (windowCount() >= initialWindowCount + 4, "WindowsDemo did not open the expected secondary windows");
+            captureScreenshot ("windows-after-show-all.png");
+
+            auto alertId = secondaryWindowIdContaining ("Alert Window");
+            captureScreenshot ("windows-alert-window.png", { "--target", alertId, "--source", "component" });
+            runCli ({ "-s", sessionName, "fill", "--class", "juce::TextEditor", "--value", "Text editor", "--exact", "--visible", "Automation window text" });
+            runCli ({ "-s", sessionName, "wait-for-value", "--class", "juce::TextEditor", "--nth", "0", "--value", "Automation window text", "--exact", "--visible", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "select-option", "--class", "juce::ComboBox", "--value", "Combo box", "--exact", "--visible", "--text", "Item 3" });
+            runCli ({ "-s", sessionName, "wait-for-value", "--class", "juce::ComboBox", "--value", "Item 3", "--exact", "--visible", "--timeout-ms", "3000" });
+            captureScreenshot ("windows-alert-filled.png", { "--target", alertId, "--source", "component" });
+            runCli ({ "-s", sessionName, "click", "--role", "button", "--name", "Button 2", "--exact", "--visible", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "wait-for-text", "Dismissed the Alert Window using Button 2", "--timeout-ms", "3000" });
+
+            auto dialogId = secondaryWindowIdContaining ("Dialog Window");
+            captureScreenshot ("windows-dialog-window.png", { "--target", dialogId, "--source", "component" });
+            runCli ({ "-s", sessionName, "press", "escape", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "wait", "--ms", "500" });
+
+            if (windowCount() > initialWindowCount)
+            {
+                runCli ({ "-s", sessionName, "click", "--role", "button", "--name", "Close Windows", "--exact", "--force", "--timeout-ms", "3000" });
+                runCli ({ "-s", sessionName, "wait", "--ms", "750" });
+            }
+
+            require (windowCount() == initialWindowCount, "WindowsDemo Close Windows did not restore the original window count");
+            captureScreenshot ("windows-after-close-all.png");
+        }
+
+        void exerciseMdiDemo()
+        {
+            runCli ({ "-s", sessionName, "wait-for-text", "Show with tabs", "--timeout-ms", "3000" });
+            auto panel = visibleNodeByClass (readSnapshot (8), "DemoMultiDocumentPanel");
+            require (nodeInt (panel, "documentCount") >= 1, "MDIDemo did not expose initial document count");
+            require (nodeString (panel, "layoutMode") == "floating", "MDIDemo did not start in floating window mode");
+
+            runCli ({ "-s", sessionName, "click", "--role", "button", "--name", "Create a new note", "--exact", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "click", "--role", "button", "--name", "Create a new note", "--exact", "--timeout-ms", "3000" });
+            panel = visibleNodeByClass (readSnapshot (8), "DemoMultiDocumentPanel");
+            require (nodeInt (panel, "documentCount") >= 3, "MDIDemo did not create additional notes");
+            captureScreenshot ("mdi-after-create-notes.png");
+
+            runCli ({ "-s", sessionName, "check", "--role", "toggleButton", "--name", "Show with tabs", "--exact", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "wait-for-value", "--role", "toggleButton", "--name", "Show with tabs", "--exact", "--value", "true", "--timeout-ms", "3000" });
+            panel = visibleNodeByClass (readSnapshot (8), "DemoMultiDocumentPanel");
+            require (nodeString (panel, "layoutMode") == "tabs", "MDIDemo did not switch to tabbed layout");
+            captureScreenshot ("mdi-tabbed-layout.png");
+
+            runCli ({ "-s", sessionName, "fill", "--role", "editableText", "--nth", "0", "Automation MDI note" });
+            runCli ({ "-s", sessionName, "wait-for-value", "--role", "editableText", "--nth", "0", "--value", "Automation MDI note", "--timeout-ms", "3000" });
+            captureScreenshot ("mdi-after-edit-note.png");
+
+            const auto countBeforeClose = nodeInt (panel, "documentCount");
+            runCli ({ "-s", sessionName, "click", "--role", "button", "--name", "Close active document", "--exact", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "wait", "--ms", "500" });
+            panel = visibleNodeByClass (readSnapshot (8), "DemoMultiDocumentPanel");
+            require (nodeInt (panel, "documentCount") == countBeforeClose - 1, "MDIDemo did not close the active document");
+            captureScreenshot ("mdi-after-close-active.png");
+        }
+
+        void exercisePropertiesDemo()
+        {
+            runCli ({ "-s", sessionName, "wait-for-text", "Text Editors", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "wait", "--ms", "500" });
+            runCli ({ "-s", sessionName, "fill", "--role", "editableText", "--value", "This is a single-line Text Property", "--exact", "Automation property value" });
+            runCli ({ "-s", sessionName, "wait-for-value", "--role", "editableText", "--nth", "0", "--value", "Automation property value", "--exact", "--timeout-ms", "3000" });
+            captureScreenshot ("properties-text-after-fill.png");
+
+            runCli ({ "-s", sessionName, "select-option", "--role", "comboBox", "--nth", "0", "--text", "Item 5" });
+            runCli ({ "-s", sessionName, "wait-for-value", "--role", "comboBox", "--nth", "0", "--value", "Item 5", "--timeout-ms", "3000" });
+            captureScreenshot ("properties-choice-after-select.png");
+
+            runCli ({ "-s", sessionName, "check", "--role", "toggleButton", "--nth", "0", "--force", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "wait-for-value", "--role", "toggleButton", "--nth", "0", "--value", "true", "--timeout-ms", "3000" });
+            captureScreenshot ("properties-toggle-after-check.png");
+
+            runCli ({ "-s", sessionName, "click-xy", "35", "235" });
+            runCli ({ "-s", sessionName, "wait-for-locator", "--role", "slider", "--visible", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "set-value", "--role", "slider", "--nth", "0", "--force", "64" });
+            runCli ({ "-s", sessionName, "wait-for-value", "--role", "slider", "--nth", "0", "--value", "64", "--timeout-ms", "3000" });
+            captureScreenshot ("properties-slider-after-set.png");
+        }
+
+        void exerciseKeyMappingsDemo()
+        {
+            runCli ({ "-s", sessionName, "wait-for-locator", "--class", "KeyPressTarget", "--visible", "--timeout-ms", "3000" });
+            auto target = visibleNodeByClass (readSnapshot (8), "KeyPressTarget");
+            auto button = findNode (target, [] (juce::DynamicObject& node) {
+                return isVisible (node) && hasClass (node, "TextButton");
+            });
+            require (! button.isVoid(), "Could not find KeyMappings target button");
+            auto beforeBounds = boundsOf (button);
+            auto before = captureScreenshot ("key-mappings-before-keys.png");
+
+            runCli ({ "-s", sessionName, "press", "shift+g", "--class", "KeyPressTarget", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "press", "shift+b", "--class", "KeyPressTarget", "--timeout-ms", "3000" });
+            target = visibleNodeByClass (readSnapshot (8), "KeyPressTarget");
+            button = findNode (target, [] (juce::DynamicObject& node) {
+                return isVisible (node) && hasClass (node, "TextButton");
+            });
+            require (! button.isVoid(), "Could not find moved KeyMappings target button");
+            auto afterBounds = boundsOf (button);
+            require (afterBounds.getX() > beforeBounds.getX() && afterBounds.getY() > beforeBounds.getY(),
+                     "KeyMappings arrow key commands did not move the target button");
+
+            runCli ({ "-s", sessionName, "press", "command+g", "--class", "KeyPressTarget", "--timeout-ms", "3000" });
+            auto after = captureScreenshot ("key-mappings-after-keys.png");
+            assertScreenshotsDiffer (before, after, "KeyMappings key commands", 4);
+        }
+
         void exerciseAudioSettingsDemo()
         {
             auto before = captureScreenshot ("audio-settings-before-toggle.png");
@@ -811,6 +1079,26 @@ namespace
                                                     "--clip-w", "500",
                                                     "--clip-h", "270" });
             assertScreenshotHasVariation (nativeScene, "OpenGL native clipped scene screenshot", 18, 15);
+        }
+
+        void exerciseOpenGL2DDemo()
+        {
+            runCli ({ "-s", sessionName, "wait-for-text", "Shader Preset:", "--timeout-ms", "7000" });
+            runCli ({ "-s", sessionName, "wait-for-value", "--role", "comboBox", "--nth", "0", "--value", "Simple Gradient", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "wait", "--ms", "1000" });
+
+            auto before = captureScreenshot ("opengl-2d-native-before.png", { "--source", "native" });
+            assertScreenshotHasVariation (before, "OpenGL2D native screenshot before", 18, 15);
+
+            runCli ({ "-s", sessionName, "select-option", "--role", "comboBox", "--nth", "0", "--text", "Solid Colour" });
+            runCli ({ "-s", sessionName, "wait-for-value", "--role", "comboBox", "--nth", "0", "--value", "Solid Colour", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "click", "--class", "CodeEditorComponent", "--nth", "0", "--force", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "press", "backspace", "--class", "CodeEditorComponent", "--nth", "0", "--force", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "wait", "--ms", "1000" });
+
+            auto after = captureScreenshot ("opengl-2d-native-after.png", { "--source", "native" });
+            assertScreenshotHasVariation (after, "OpenGL2D native screenshot after", 18, 15);
+            assertScreenshotsDiffer (before, after, "OpenGL2D shader selection/edit", 8);
         }
 
         void exerciseAccessibilityDemo()

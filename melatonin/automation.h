@@ -2676,6 +2676,16 @@ namespace melatonin
                 node->setProperty ("options", listRowsToVar (*listBox));
             }
 
+            if (auto* multiPanel = dynamic_cast<juce::MultiDocumentPanel*> (&component))
+            {
+                node->setProperty ("documentCount", multiPanel->getNumDocuments());
+                node->setProperty ("layoutMode", multiPanel->getLayoutMode() == juce::MultiDocumentPanel::FloatingWindows ? "floating"
+                                                                                                                            : "tabs");
+
+                if (auto* activeDocument = multiPanel->getActiveDocument())
+                    node->setProperty ("activeDocument", activeDocument->getName());
+            }
+
             juce::Array<juce::var> children;
 
             if (depth < maxDepth)
@@ -2746,13 +2756,11 @@ namespace melatonin
 
         void addSerializedChildren (juce::Array<juce::var>& children, juce::Component& component, int depth, int maxDepth)
         {
-            if (auto* multiPanel = dynamic_cast<juce::MultiDocumentPanel*> (&component))
-            {
-                if (auto* child = multiPanel->getCurrentTabbedComponent())
-                    children.add (serializeComponent (*child, depth, maxDepth));
+            juce::Component* serializedTabbedDocument = nullptr;
 
-                return;
-            }
+            if (auto* multiPanel = dynamic_cast<juce::MultiDocumentPanel*> (&component))
+                if ((serializedTabbedDocument = multiPanel->getCurrentTabbedComponent()) != nullptr)
+                    children.add (serializeComponent (*serializedTabbedDocument, depth, maxDepth));
 
             if (auto* tabs = dynamic_cast<juce::TabbedComponent*> (&component))
             {
@@ -2767,7 +2775,7 @@ namespace melatonin
             {
                 auto* child = component.getChildComponent (i);
 
-                if (child == nullptr || isInspectorInternalComponent (*child))
+                if (child == nullptr || child == serializedTabbedDocument || isInspectorInternalComponent (*child))
                     continue;
 
                 children.add (serializeComponent (*child, depth, maxDepth));
@@ -2776,11 +2784,15 @@ namespace melatonin
 
         static bool isInspectorInternalComponent (juce::Component& component)
         {
-            if (component.getName() == "Melatonin Overlay")
+            if (component.getName() == "Melatonin Overlay"
+                || component.getName() == "Melatonin Inspector"
+                || component.getName() == "Undo Manager Inspector")
                 return true;
 
             auto className = type (component);
-            return className.contains ("melatonin::FPSMeter");
+            return className.contains ("melatonin::FPSMeter")
+                   || className.contains ("melatonin::Inspector")
+                   || className.contains ("melatonin::UndoManagerInspector");
         }
 
         static void appendTextSnapshot (juce::String& out, const juce::var& node, int indent)
@@ -2879,7 +2891,10 @@ namespace melatonin
                                "rowCount",
                                "selectedRow",
                                "selectedRows",
-                               "options" })
+                               "options",
+                               "documentCount",
+                               "layoutMode",
+                               "activeDocument" })
             {
                 auto property = object->getProperty (name);
 
