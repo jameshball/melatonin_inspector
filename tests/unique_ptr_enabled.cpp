@@ -8,6 +8,11 @@ public:
     {
         mainWindow.reset (new MainWindow (getApplicationName()));
         inspector = std::make_unique<melatonin::Inspector> (*mainWindow);
+#if MELATONIN_INSPECTOR_ENABLE_AUTOMATION
+        melatonin::AutomationOptions options;
+        options.sessionName = "unique_ptr_enabled";
+        inspector->enableAutomation (options);
+#endif
         inspector->setVisible (true);
 
         // on CI, we start this as a background process

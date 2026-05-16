@@ -10,6 +10,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED YES)
 include(FetchContent)
 if (MelatoninInspector_IS_TOP_LEVEL)
     option(JUCE7 "Run tests on JUCE 7" OFF)
+    option(MELATONIN_INSPECTOR_ENABLE_AUTOMATION "Enable the optional melatonin_inspector automation endpoint in the test app" OFF)
+    option(MELATONIN_INSPECTOR_BUILD_CLI "Build the melatonin-ui automation CLI" ON)
 
     message(STATUS "Cloning JUCE...")
     if (JUCE7)
@@ -53,6 +55,17 @@ if (MelatoninInspector_IS_TOP_LEVEL)
 
     set_target_properties("${TARGET_NAME}" PROPERTIES COMPILE_WARNING_AS_ERROR ON)
 
+    if (MELATONIN_INSPECTOR_BUILD_CLI)
+        juce_add_console_app(melatonin-ui VERSION 1.0.0)
+        target_sources(melatonin-ui PRIVATE tools/melatonin_ui.cpp)
+        target_compile_definitions(melatonin-ui PRIVATE JUCE_USE_CURL=0)
+        target_link_libraries(melatonin-ui PRIVATE
+            juce::juce_core
+            juce::juce_recommended_config_flags
+            juce::juce_recommended_lto_flags
+            juce::juce_recommended_warning_flags)
+    endif ()
+
 endif ()
 
 if (NOT COMMAND juce_add_module)
@@ -62,6 +75,10 @@ endif ()
 # this makes the assumption the current directory is named melatonin_inspector
 juce_add_module("${CMAKE_CURRENT_LIST_DIR}")
 add_library(Melatonin::Inspector ALIAS melatonin_inspector)
+
+if (MELATONIN_INSPECTOR_ENABLE_AUTOMATION)
+    target_compile_definitions(melatonin_inspector INTERFACE MELATONIN_INSPECTOR_ENABLE_AUTOMATION=1)
+endif ()
 
 if (MelatoninInspector_IS_TOP_LEVEL)
     target_link_libraries("${TARGET_NAME}" PRIVATE melatonin_inspector

@@ -22,6 +22,7 @@ END_JUCE_MODULE_DECLARATION
 #endif
 
 #include "melatonin/lookandfeel.h"
+#include "melatonin_inspector/melatonin/automation.h"
 #include "melatonin_inspector/melatonin/components/overlay.h"
 #include "melatonin_inspector/melatonin/helpers/inspector_settings.h"
 #include "melatonin_inspector/melatonin/helpers/overlay_mouse_listener.h"
@@ -96,6 +97,9 @@ namespace melatonin
 
         ~Inspector() override
         {
+#if MELATONIN_INSPECTOR_ENABLE_AUTOMATION
+            disableAutomation();
+#endif
             clearRoot();
 
             this->removeKeyListener (&keyListener);
@@ -112,6 +116,35 @@ namespace melatonin
         void setUndoManager (juce::UndoManager* newUndoManager)
         {
             undoManager = newUndoManager;
+        }
+
+        void enableAutomation (AutomationOptions options = {})
+        {
+#if MELATONIN_INSPECTOR_ENABLE_AUTOMATION
+            if (root == nullptr)
+                return;
+
+            automation = std::make_unique<AutomationController> (*root, std::move (options));
+#else
+            juce::ignoreUnused (options);
+            jassertfalse;
+#endif
+        }
+
+        void disableAutomation()
+        {
+#if MELATONIN_INSPECTOR_ENABLE_AUTOMATION
+            automation.reset();
+#endif
+        }
+
+        [[nodiscard]] bool isAutomationEnabled() const
+        {
+#if MELATONIN_INSPECTOR_ENABLE_AUTOMATION
+            return automation != nullptr && automation->isRunning();
+#else
+            return false;
+#endif
         }
 
         void setRoot (juce::Component& rootComponent)
@@ -132,12 +165,22 @@ namespace melatonin
             fpsMeter.setRoot (*root);
             overlayMouseListener.setRoot (*root);
             inspectorComponent.setRoot (*root);
+
+#if MELATONIN_INSPECTOR_ENABLE_AUTOMATION
+            if (automation)
+                automation->updateRoot (*root);
+#endif
         }
 
         void clearRoot()
         {
             if (root == nullptr)
                 return;
+
+#if MELATONIN_INSPECTOR_ENABLE_AUTOMATION
+            if (automation)
+                automation->clearRoot();
+#endif
 
             root->removeKeyListener (&keyListener);
             root->removeComponentListener (this);
@@ -355,6 +398,9 @@ namespace melatonin
         std::unique_ptr<UndoManagerInspector> undoManagerInspector;
         InspectorComponent inspectorComponent;
         juce::Component::SafePointer<juce::Component> root;
+#if MELATONIN_INSPECTOR_ENABLE_AUTOMATION
+        std::unique_ptr<AutomationController> automation;
+#endif
         bool inspectorEnabled = false;
         bool selectionLock = false;
         Overlay overlay;

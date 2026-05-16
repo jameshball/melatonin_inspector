@@ -297,6 +297,39 @@ Component paint timings (the histogram + AVG/MAX panel) **require JUCE 8.0.13 or
 
 See ["Display component performance in real time"](#display-component-performance-in-real-time) above.
 
+## 7. Optional: LLM automation
+
+`melatonin_inspector` can expose an opt-in local automation endpoint for Playwright-style agent workflows. This is disabled by default and should only be enabled for trusted local development sessions.
+
+Enable the endpoint at compile time:
+
+```cmake
+target_compile_definitions(YourProject PRIVATE MELATONIN_INSPECTOR_ENABLE_AUTOMATION=1)
+```
+
+Then enable it on your inspector:
+
+```cpp
+melatonin::Inspector inspector { *this };
+
+melatonin::AutomationOptions options;
+options.sessionName = "MyPlugin";
+inspector.enableAutomation (options);
+```
+
+The endpoint advertises itself in your system temp directory and is controlled with the `melatonin-ui` CLI built by this repo's top-level CMake project:
+
+```sh
+melatonin-ui list
+melatonin-ui -s MyPlugin snapshot
+melatonin-ui -s MyPlugin screenshot --target root --file /tmp/my-plugin.png
+melatonin-ui -s MyPlugin click m4
+melatonin-ui -s MyPlugin type m8 "hello"
+melatonin-ui -s MyPlugin set-bounds m12 --x 20 --y 40 --w 200 --h 48
+```
+
+There is also a dependency-free MCP adapter at `tools/melatonin_mcp.js`. Configure an MCP client to launch it with Node, then use the `juce_snapshot`, `juce_screenshot`, `juce_click`, `juce_type`, and related tools against the same running automation session.
+
 ## FAQ
 
 ### Can I use this in a GUI app/standalone?
