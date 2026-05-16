@@ -376,6 +376,8 @@ namespace melatonin
         static bool isAutoWaitMethod (const juce::String& method)
         {
             return method == "click"
+                   || method == "dblclick"
+                   || method == "right_click"
                    || method == "hover"
                    || method == "mouse_move"
                    || method == "mouse_down"
@@ -445,6 +447,12 @@ namespace melatonin
 
             if (method == "click")
                 return click (params);
+
+            if (method == "dblclick")
+                return doubleClick (params);
+
+            if (method == "right_click")
+                return rightClick (params);
 
             if (method == "click_xy")
                 return clickXY (params);
@@ -766,6 +774,59 @@ namespace melatonin
                 return actionabilityResult (*target);
 
             activateComponent (*target);
+            return snapshotAfterAction();
+        }
+
+        juce::var doubleClick (juce::DynamicObject& params)
+        {
+            if (!options.allowInput)
+                return error ("input_disabled", "Automation input is disabled for this session.");
+
+            auto resolution = resolveTarget (params, true, true);
+
+            if (!resolution.error.isVoid())
+                return resolution.error;
+
+            auto* target = resolution.component;
+
+            if (auto validationError = validateInputTarget (*target, params); !validationError.isVoid())
+                return validationError;
+
+            if (isTrial (params))
+                return actionabilityResult (*target);
+
+            if (auto* button = dynamic_cast<juce::Button*> (target))
+            {
+                button->triggerClick();
+                button->triggerClick();
+            }
+            else
+            {
+                synthesizeComponentClick (*target, juce::ModifierKeys(), 2);
+            }
+
+            return snapshotAfterAction();
+        }
+
+        juce::var rightClick (juce::DynamicObject& params)
+        {
+            if (!options.allowInput)
+                return error ("input_disabled", "Automation input is disabled for this session.");
+
+            auto resolution = resolveTarget (params, true, true);
+
+            if (!resolution.error.isVoid())
+                return resolution.error;
+
+            auto* target = resolution.component;
+
+            if (auto validationError = validateInputTarget (*target, params); !validationError.isVoid())
+                return validationError;
+
+            if (isTrial (params))
+                return actionabilityResult (*target);
+
+            synthesizeComponentClick (*target, juce::ModifierKeys (juce::ModifierKeys::rightButtonModifier), 1);
             return snapshotAfterAction();
         }
 
@@ -1660,6 +1721,68 @@ namespace melatonin
             auto* found = findComponentAt (*root, rootBounds.getCentre());
 
             return found == &target || (found != nullptr && target.isParentOf (found));
+        }
+
+        void synthesizeComponentClick (juce::Component& target, juce::ModifierKeys buttonModifiers, int numberOfClicks)
+        {
+            if (root == nullptr)
+                return;
+
+            auto rootPoint = getRootBounds (target).getCentre();
+            auto localPoint = target.getLocalPoint (root, rootPoint).toFloat();
+            auto source = juce::Desktop::getInstance().getMainMouseSource();
+            auto now = juce::Time::getCurrentTime();
+
+            target.mouseDown ({ source,
+                                localPoint,
+                                buttonModifiers,
+                                1.0f,
+                                0.0f,
+                                0.0f,
+                                0.0f,
+                                0.0f,
+                                &target,
+                                &target,
+                                now,
+                                localPoint,
+                                now,
+                                numberOfClicks,
+                                false });
+
+            target.mouseUp ({ source,
+                              localPoint,
+                              juce::ModifierKeys(),
+                              0.0f,
+                              0.0f,
+                              0.0f,
+                              0.0f,
+                              0.0f,
+                              &target,
+                              &target,
+                              now + juce::RelativeTime::milliseconds (2),
+                              localPoint,
+                              now,
+                              numberOfClicks,
+                              false });
+
+            if (numberOfClicks >= 2)
+            {
+                target.mouseDoubleClick ({ source,
+                                           localPoint,
+                                           buttonModifiers,
+                                           1.0f,
+                                           0.0f,
+                                           0.0f,
+                                           0.0f,
+                                           0.0f,
+                                           &target,
+                                           &target,
+                                           now + juce::RelativeTime::milliseconds (3),
+                                           localPoint,
+                                           now,
+                                           numberOfClicks,
+                                           false });
+            }
         }
 
         void synthesizeDragOn (juce::Component& target, juce::Point<int> rootStart, juce::Point<int> rootEnd)

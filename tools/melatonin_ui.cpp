@@ -401,6 +401,12 @@ namespace
             tool ("juce_click",
                   "Click a component ref and return a fresh snapshot.",
                   toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() } })),
+            tool ("juce_dblclick",
+                  "Double-click a component ref or locator and return a fresh snapshot.",
+                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() } })),
+            tool ("juce_right_click",
+                  "Right-click a component ref or locator and return a fresh snapshot.",
+                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() } })),
             tool ("juce_click_xy",
                   "Click root-local coordinates and return a fresh snapshot.",
                   toolSchema ({ { "session", stringSchema() }, { "x", numberSchema() }, { "y", numberSchema() } }, { "x", "y" })),
@@ -490,6 +496,8 @@ namespace
         if (name == "juce_locator") return "locator";
         if (name == "juce_screenshot") return "screenshot";
         if (name == "juce_click") return "click";
+        if (name == "juce_dblclick") return "dblclick";
+        if (name == "juce_right_click") return "right_click";
         if (name == "juce_click_xy") return "click_xy";
         if (name == "juce_hover") return "hover";
         if (name == "juce_mouse_move") return "mouse_move";
@@ -731,6 +739,8 @@ namespace
             << "  melatonin-ui -s <session> snapshot [--format text|json] [--depth n]\n"
             << "  melatonin-ui -s <session> screenshot [--target root|--ref m1-1] --file /tmp/root.png\n"
             << "  melatonin-ui -s <session> click <ref>\n"
+            << "  melatonin-ui -s <session> dblclick <ref>\n"
+            << "  melatonin-ui -s <session> right-click <ref>\n"
             << "  melatonin-ui -s <session> click-xy <x> <y>\n"
             << "  melatonin-ui -s <session> hover <x> <y>\n"
             << "  melatonin-ui -s <session> mouse-down <x> <y>\n"
@@ -888,7 +898,7 @@ int main (int argc, char* argv[])
             return 0;
         }
 
-        if (command == "click")
+        if (command == "click" || command == "dblclick" || command == "right-click")
         {
             juce::DynamicObject tempParams;
             addActionOptions (args, tempParams);
@@ -898,7 +908,9 @@ int main (int argc, char* argv[])
             params.getDynamicObject()->setProperty ("force", tempParams.getProperty ("force"));
             params.getDynamicObject()->setProperty ("trial", tempParams.getProperty ("trial"));
             addLocatorIfPresent (*params.getDynamicObject(), locator);
-            printResult (request (*sessionObject, "click", params));
+            printResult (request (*sessionObject,
+                                  command == "click" ? "click" : (command == "dblclick" ? "dblclick" : "right_click"),
+                                  params));
             return 0;
         }
 

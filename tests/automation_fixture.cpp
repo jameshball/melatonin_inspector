@@ -525,6 +525,14 @@ namespace
             require (dragBoxPointDragBounds.getX() == dragBoxAfterBounds.getX() + 20, "drag-xy did not move Drag Box on the x axis");
             require (dragBoxPointDragBounds.getY() == dragBoxAfterBounds.getY() + 10, "drag-xy did not move Drag Box on the y axis");
 
+            runCli ({ "-s", sessionName, "dblclick", "--component-id", "advanced.inputProbe" });
+            snapshot = readSnapshot();
+            assertStatus (snapshot, "Status: DoubleClick");
+
+            runCli ({ "-s", sessionName, "right-click", "--component-id", "advanced.inputProbe" });
+            snapshot = readSnapshot();
+            assertStatus (snapshot, "Status: RightClick");
+
             auto resetRef = refByComponentName (snapshot, "advanced.reset");
             runCli ({ "-s", sessionName, "set-bounds", resetRef, "--x", "20", "--y", "24", "--w", "180", "--h", "34" });
             snapshot = readSnapshot();
@@ -688,6 +696,8 @@ namespace
             bool foundSnapshotTool = false;
             bool foundLocatorTool = false;
             bool foundWaitForTextTool = false;
+            bool foundDoubleClickTool = false;
+            bool foundRightClickTool = false;
 
             for (const auto& toolInfo : *tools.getArray())
             {
@@ -699,11 +709,19 @@ namespace
 
                 if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_wait_for_text")
                     foundWaitForTextTool = true;
+
+                if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_dblclick")
+                    foundDoubleClickTool = true;
+
+                if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_right_click")
+                    foundRightClickTool = true;
             }
 
             require (foundSnapshotTool, "MCP tools/list did not expose juce_snapshot");
             require (foundLocatorTool, "MCP tools/list did not expose juce_locator");
             require (foundWaitForTextTool, "MCP tools/list did not expose juce_wait_for_text");
+            require (foundDoubleClickTool, "MCP tools/list did not expose juce_dblclick");
+            require (foundRightClickTool, "MCP tools/list did not expose juce_right_click");
 
             auto capabilitiesCallResult = assertMcpResult (parseMcpLine (lines, 2), 3);
             auto& capabilitiesCall = asObject (capabilitiesCallResult, "MCP capabilities result");
@@ -933,6 +951,38 @@ namespace
         juce::Rectangle<int> dragStartBounds;
     };
 
+    class InputProbe : public juce::Component
+    {
+    public:
+        InputProbe()
+        {
+            setName ("advanced.inputProbe");
+            setComponentID ("advanced.inputProbe");
+        }
+
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (juce::Colours::darkblue);
+            g.setColour (juce::Colours::white);
+            g.drawFittedText ("Input Probe", getLocalBounds(), juce::Justification::centred, 1);
+        }
+
+        void mouseDown (const juce::MouseEvent& event) override
+        {
+            if (event.mods.isRightButtonDown() && onRightClick)
+                onRightClick();
+        }
+
+        void mouseDoubleClick (const juce::MouseEvent&) override
+        {
+            if (onDoubleClick)
+                onDoubleClick();
+        }
+
+        std::function<void()> onDoubleClick;
+        std::function<void()> onRightClick;
+    };
+
     class EditorPage : public juce::Component
     {
     public:
@@ -1011,6 +1061,7 @@ namespace
             actions.addAndMakeVisible (reset);
 
             actions.addAndMakeVisible (dragBox);
+            actions.addAndMakeVisible (inputProbe);
 
             goActions.onClick = [this] {
                 nestedTabs.setCurrentTabIndex (1);
@@ -1033,12 +1084,14 @@ namespace
 
             reset.setBounds (actions.getLocalBounds().reduced (16).removeFromTop (34).removeFromLeft (140));
             dragBox.setBounds (240, 24, 100, 42);
+            inputProbe.setBounds (360, 24, 120, 42);
         }
 
         CallbackTabbedComponent nestedTabs { juce::TabbedButtonBar::TabsAtTop };
         juce::TextButton goActions;
         juce::TextButton reset;
         DragBox dragBox;
+        InputProbe inputProbe;
         std::function<void (const juce::String&)> onNestedTabChanged;
 
     private:
@@ -1101,6 +1154,14 @@ namespace
 
             advanced.dragBox.onDragged = [this] (juce::Rectangle<int> bounds) {
                 setStatus ("Status: DragBox " + juce::String (bounds.getX()) + "," + juce::String (bounds.getY()));
+            };
+
+            advanced.inputProbe.onDoubleClick = [this] {
+                setStatus ("Status: DoubleClick");
+            };
+
+            advanced.inputProbe.onRightClick = [this] {
+                setStatus ("Status: RightClick");
             };
 
             tabs.onCurrentTabChanged = [this] (int index, const juce::String& name) {
