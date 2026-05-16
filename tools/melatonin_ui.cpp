@@ -485,6 +485,11 @@ namespace
         if (name == "juce_set_bounds") return "set_bounds";
         if (name == "juce_set_property") return "set_property";
         if (name == "juce_wait") return "wait";
+        if (name == "juce_wait_for_ref") return "wait_for_ref";
+        if (name == "juce_wait_for_locator") return "wait_for_locator";
+        if (name == "juce_wait_for_text") return "wait_for_text";
+        if (name == "juce_wait_for_value") return "wait_for_value";
+        if (name == "juce_wait_for_snapshot_change") return "wait_for_snapshot_change";
 
         return {};
     }
@@ -713,7 +718,8 @@ namespace
             << "  melatonin-ui -s <session> drag <ref> --dx n --dy n\n"
             << "  melatonin-ui -s <session> set-bounds <ref> --x n --y n --w n --h n\n"
             << "  melatonin-ui -s <session> set-property <ref> <name> <value>\n"
-            << "  melatonin-ui -s <session> wait --ms n\n";
+            << "  melatonin-ui -s <session> wait --ms n\n"
+            << "  melatonin-ui -s <session> wait-for-text <text> [--timeout-ms n]\n";
     }
 
     juce::String popFront (juce::StringArray& args)
@@ -1063,6 +1069,52 @@ int main (int argc, char* argv[])
         if (command == "wait")
         {
             printResult (request (*sessionObject, "wait", object ({ { "ms", optionValue (args, "--ms", "250").getIntValue() } })));
+            return 0;
+        }
+
+        if (command == "wait-for-ref")
+        {
+            printResult (request (*sessionObject, "wait_for_ref", object ({ { "ref", args.size() >= 1 ? args[0] : juce::String() },
+                                                                            { "timeoutMs", optionValue (args, "--timeout-ms", "5000").getIntValue() } })));
+            return 0;
+        }
+
+        if (command == "wait-for-locator")
+        {
+            auto locator = parseLocatorOptions (args);
+            auto params = object ({ { "locator", locator },
+                                    { "timeoutMs", optionValue (args, "--timeout-ms", "5000").getIntValue() } });
+            printResult (request (*sessionObject, "wait_for_locator", params), true);
+            return 0;
+        }
+
+        if (command == "wait-for-text")
+        {
+            auto timeout = optionValue (args, "--timeout-ms", "5000").getIntValue();
+            printResult (request (*sessionObject, "wait_for_text", object ({ { "text", args.joinIntoString (" ") },
+                                                                             { "timeoutMs", timeout } })));
+            return 0;
+        }
+
+        if (command == "wait-for-value")
+        {
+            auto value = optionValue (args, "--value");
+            auto ref = optionValue (args, "--ref");
+            auto locator = parseLocatorOptions (args);
+            auto params = object ({ { "ref", ref },
+                                    { "value", value },
+                                    { "timeoutMs", optionValue (args, "--timeout-ms", "5000").getIntValue() } });
+            addLocatorIfPresent (*params.getDynamicObject(), locator);
+            printResult (request (*sessionObject, "wait_for_value", params), true);
+            return 0;
+        }
+
+        if (command == "wait-for-snapshot-change")
+        {
+            printResult (request (*sessionObject,
+                                  "wait_for_snapshot_change",
+                                  object ({ { "stateHash", optionValue (args, "--state-hash") },
+                                            { "timeoutMs", optionValue (args, "--timeout-ms", "5000").getIntValue() } })));
             return 0;
         }
     }

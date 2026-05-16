@@ -398,6 +398,11 @@ namespace
             require ((bool) asObject (findByComponentName (snapshot, "controls.power"), "controls.power").getProperty ("toggleState"),
                      "click-xy did not toggle the power button");
             assertStatus (snapshot, "Status: Power On");
+            runCli ({ "-s", sessionName, "wait-for-ref", refByComponentName (snapshot, "controls.slider"), "--timeout-ms", "500" });
+            runCli ({ "-s", sessionName, "wait-for-text", "Status: Power On", "--timeout-ms", "500" });
+            runCli ({ "-s", sessionName, "wait-for-snapshot-change", "--state-hash", initialStateHash, "--timeout-ms", "500" });
+            readLocator ({ "--component-id", "controls.slider" });
+            runCli ({ "-s", sessionName, "wait-for-locator", "--component-id", "controls.slider", "--timeout-ms", "500" });
 
             runCli ({ "-s", sessionName, "uncheck", "--component-id", "controls.power" });
             snapshot = readSnapshot();
@@ -415,6 +420,7 @@ namespace
             require (juce::roundToInt (valueOf (findByComponentName (snapshot, "controls.slider"))) == 44,
                      "semantic set-value did not update the slider");
             assertStatus (snapshot, "Status: Slider 44");
+            runCli ({ "-s", sessionName, "wait-for-value", "--component-id", "controls.slider", "--value", "44", "--timeout-ms", "500" });
 
             runCli ({ "-s", sessionName, "select-option", "--component-id", "controls.combo", "--text", "Beta" });
             snapshot = readSnapshot();

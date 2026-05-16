@@ -235,6 +235,9 @@ namespace melatonin
             if (method == "wait")
                 sleepUntilReadyOrStopped (juce::jlimit (0, 30000, getInt (params, "ms", 250)));
 
+            if (isWaitForMethod (method))
+                return waitForCondition (method, params);
+
             if (!isAutoWaitMethod (method))
                 return callOnMessageThread ([this, method, &params]() {
                     return dispatch (method, params);
@@ -259,6 +262,105 @@ namespace melatonin
                 return error ("operation_timeout", "Timed out waiting for actionability: " + errorObject->getProperty ("message").toString());
 
             return error ("operation_timeout", "Timed out waiting for actionability.");
+        }
+
+        static bool isWaitForMethod (const juce::String& method)
+        {
+            return method == "wait_for_ref"
+                   || method == "wait_for_locator"
+                   || method == "wait_for_text"
+                   || method == "wait_for_value"
+                   || method == "wait_for_snapshot_change";
+        }
+
+        juce::var waitForCondition (const juce::String& method, juce::DynamicObject& params)
+        {
+            const auto deadline = juce::Time::currentTimeMillis() + juce::jlimit (0, 30000, getInt (params, "timeoutMs", 5000));
+            juce::var lastResult;
+
+            do
+            {
+                lastResult = callOnMessageThread ([this, method, &params]() {
+                    return evaluateWaitCondition (method, params);
+                });
+
+                if (!isError (lastResult))
+                    return lastResult;
+
+                sleepUntilReadyOrStopped (50);
+            } while (juce::Time::currentTimeMillis() < deadline && !threadShouldExit());
+
+            if (auto* errorObject = lastResult.getDynamicObject())
+                return error ("operation_timeout", "Timed out waiting: " + errorObject->getProperty ("message").toString());
+
+            return error ("operation_timeout", "Timed out waiting.");
+        }
+
+        juce::var evaluateWaitCondition (const juce::String& method, juce::DynamicObject& params)
+        {
+            if (method == "wait_for_ref")
+            {
+                auto* target = getTargetComponent (getString (params, "ref", {}));
+                return target != nullptr ? snapshotAfterAction()
+                                         : error ("wait_not_ready", "Ref is not available.");
+            }
+
+            if (method == "wait_for_locator")
+            {
+                auto result = resolveLocatorQuery (params, false, false);
+
+                if (isError (result))
+                    return result;
+
+                auto* object = result.getDynamicObject();
+                return object != nullptr && (int) object->getProperty ("count") > 0
+                           ? result
+                           : error ("wait_not_ready", "Locator has no matches.");
+            }
+
+            if (method == "wait_for_text")
+            {
+                juce::DynamicObject snapshotParams;
+                snapshotParams.setProperty ("format", "text");
+                snapshotParams.setProperty ("depth", getInt (params, "depth", 12));
+                auto result = snapshot (snapshotParams);
+                auto* object = result.getDynamicObject();
+                auto text = object != nullptr ? object->getProperty ("text").toString() : juce::String();
+
+                return normalizeForLocator (text).contains (normalizeForLocator (getString (params, "text", {})))
+                           ? result
+                           : error ("wait_not_ready", "Text was not found.");
+            }
+
+            if (method == "wait_for_value")
+            {
+                auto resolution = resolveTarget (params, false, true);
+
+                if (!resolution.error.isVoid())
+                    return resolution.error;
+
+                auto expected = getString (params, "value", {});
+                auto current = semanticValueFor (*resolution.component);
+
+                return matchesString (current, expected, (bool) params.getProperty ("exact"))
+                           ? object ({ { "value", current } })
+                           : error ("wait_not_ready", "Value did not match. Current value: " + current);
+            }
+
+            if (method == "wait_for_snapshot_change")
+            {
+                juce::DynamicObject snapshotParams;
+                snapshotParams.setProperty ("format", "text");
+                snapshotParams.setProperty ("depth", getInt (params, "depth", 12));
+                auto result = snapshot (snapshotParams);
+                auto* object = result.getDynamicObject();
+
+                return object != nullptr && object->getProperty ("stateHash").toString() != getString (params, "stateHash", {})
+                           ? result
+                           : error ("wait_not_ready", "Snapshot state hash has not changed.");
+            }
+
+            return error ("unknown_method", "Unknown wait method: " + method);
         }
 
         static bool isAutoWaitMethod (const juce::String& method)
@@ -1294,6 +1396,30 @@ namespace melatonin
             return node.getProperty ("name").toString() + " "
                    + node.getProperty ("title").toString() + " "
                    + node.getProperty ("value").toString();
+        }
+
+        static juce::String semanticValueFor (juce::Component& component)
+        {
+            if (auto* slider = dynamic_cast<juce::Slider*> (&component))
+                return juce::String (slider->getValue());
+
+            if (auto* combo = dynamic_cast<juce::ComboBox*> (&component))
+                return combo->getText();
+
+            if (auto* editor = dynamic_cast<juce::TextEditor*> (&component))
+                return editor->getText();
+
+            if (auto* label = dynamic_cast<juce::Label*> (&component))
+                return label->getText();
+
+            if (auto* button = dynamic_cast<juce::Button*> (&component))
+                return button->getToggleState() ? "true" : "false";
+
+            if (component.isAccessible() && component.getAccessibilityHandler() != nullptr)
+                if (auto* valueInterface = component.getAccessibilityHandler()->getValueInterface())
+                    return valueInterface->getCurrentValueAsString();
+
+            return {};
         }
 
         static juce::var summarizeNode (juce::DynamicObject& node)
