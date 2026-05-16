@@ -106,6 +106,8 @@ namespace
             runCli ({ "-s", sessionName, "click", "--role", "button", "--name", "Browse Demos" });
             juce::Thread::sleep (500);
             runCli ({ "-s", sessionName, "wait-for-locator", "--role", "listItem", "--name", "GUI", "--timeout-ms", "2000" });
+            runCli ({ "-s", sessionName, "select-option", "--role", "list", "--exact", "--text", "GUI" });
+            juce::Thread::sleep (250);
             captureScreenshot ("side-panel.png");
 
             runCli ({ "-s", sessionName, "click-xy", "70", "20" });

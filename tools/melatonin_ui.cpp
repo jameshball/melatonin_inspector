@@ -453,7 +453,7 @@ namespace
                   "Set a semantic value on a Slider or TextEditor.",
                   toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "value", numberSchema() } }, { "value" })),
             tool ("juce_select_option",
-                  "Select a ComboBox option by text, index, or id.",
+                  "Select a ComboBox option or ListBox row by text, index, or id.",
                   toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "text", stringSchema() }, { "index", numberSchema() }, { "id", numberSchema() } })),
             tool ("juce_select_tab",
                   "Select a TabbedComponent tab by name or index.",

@@ -452,6 +452,14 @@ namespace
             require (asObject (findByComponentName (snapshot, "controls.combo"), "controls.combo").getProperty ("value").toString() == "Beta",
                      "semantic select-option did not select Beta");
 
+            runCli ({ "-s", sessionName, "select-option", "--component-id", "controls.optionList", "--text", "Green" });
+            snapshot = readSnapshot();
+            assertStatus (snapshot, "Status: List Green");
+
+            runCli ({ "-s", sessionName, "select-option", "--component-id", "controls.optionList", "--index", "2" });
+            snapshot = readSnapshot();
+            assertStatus (snapshot, "Status: List Blue");
+
             auto sliderBefore = valueOf (findByComponentName (snapshot, "controls.slider"));
             dragRef (refByComponentName (snapshot, "controls.slider"), 90, 0);
             snapshot = readSnapshot();
@@ -855,6 +863,33 @@ namespace
     class ControlsPage : public juce::Component
     {
     public:
+        class OptionsModel : public juce::ListBoxModel
+        {
+        public:
+            int getNumRows() override { return options.size(); }
+
+            juce::String getNameForRow (int rowNumber) override
+            {
+                return juce::isPositiveAndBelow (rowNumber, options.size()) ? options[rowNumber] : juce::String();
+            }
+
+            void paintListBoxItem (int rowNumber, juce::Graphics& g, int width, int height, bool rowIsSelected) override
+            {
+                g.fillAll (rowIsSelected ? juce::Colours::steelblue : juce::Colours::darkgrey);
+                g.setColour (juce::Colours::white);
+                g.drawText (getNameForRow (rowNumber), 8, 0, width - 16, height, juce::Justification::centredLeft);
+            }
+
+            void selectedRowsChanged (int lastRowSelected) override
+            {
+                if (onSelected && juce::isPositiveAndBelow (lastRowSelected, options.size()))
+                    onSelected (options[lastRowSelected]);
+            }
+
+            juce::StringArray options { "Red", "Green", "Blue" };
+            std::function<void (const juce::String&)> onSelected;
+        };
+
         ControlsPage()
         {
             setName ("Controls Page");
@@ -904,6 +939,12 @@ namespace
             disabled.setComponentID ("controls.disabled");
             disabled.setEnabled (false);
             addAndMakeVisible (disabled);
+
+            optionList.setName ("controls.optionList");
+            optionList.setComponentID ("controls.optionList");
+            optionList.setModel (&optionsModel);
+            optionList.setRowHeight (24);
+            addAndMakeVisible (optionList);
         }
 
         void resized() override
@@ -922,6 +963,8 @@ namespace
             duplicateB.setBounds (area.removeFromTop (30).removeFromLeft (140));
             area.removeFromTop (10);
             disabled.setBounds (area.removeFromTop (30).removeFromLeft (160));
+            area.removeFromTop (10);
+            optionList.setBounds (area.removeFromTop (82).removeFromLeft (180));
         }
 
         juce::TextButton goEditor;
@@ -931,6 +974,8 @@ namespace
         juce::TextButton duplicateA;
         juce::TextButton duplicateB;
         juce::TextButton disabled;
+        OptionsModel optionsModel;
+        juce::ListBox optionList;
 
     private:
         juce::Label title;
@@ -1187,6 +1232,10 @@ namespace
 
             controls.slider.onValueChange = [this] {
                 setStatus ("Status: Slider " + juce::String (juce::roundToInt (controls.slider.getValue())));
+            };
+
+            controls.optionsModel.onSelected = [this] (const juce::String& option) {
+                setStatus ("Status: List " + option);
             };
 
             editor.apply.onClick = [this] {

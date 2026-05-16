@@ -1084,10 +1084,15 @@ namespace melatonin
 
             auto* combo = dynamic_cast<juce::ComboBox*> (target);
 
-            if (combo == nullptr)
-                return error ("target_not_combo_box", "Target component is not a ComboBox.");
-
             auto text = getString (params, "text", {});
+
+            if (combo == nullptr)
+            {
+                if (auto* listBox = dynamic_cast<juce::ListBox*> (target))
+                    return selectListBoxRow (*listBox, params, text);
+
+                return error ("target_not_selectable", "Target component is not a ComboBox or ListBox.");
+            }
 
             if (text.isNotEmpty())
             {
@@ -1116,6 +1121,46 @@ namespace melatonin
             }
 
             return error ("invalid_option", "select_option requires text, index, or id.");
+        }
+
+        juce::var selectListBoxRow (juce::ListBox& listBox, juce::DynamicObject& params, const juce::String& text)
+        {
+            int row = -1;
+
+            if (text.isNotEmpty())
+            {
+                if (auto* model = listBox.getListBoxModel())
+                {
+                    for (int i = 0; i < model->getNumRows(); ++i)
+                    {
+                        if (matchesString (model->getNameForRow (i), text, (bool) params.getProperty ("exact")))
+                        {
+                            row = i;
+                            break;
+                        }
+                    }
+                }
+            }
+            else if (!params.getProperty ("index").isVoid())
+            {
+                row = (int) params.getProperty ("index");
+            }
+            else if (!params.getProperty ("id").isVoid())
+            {
+                row = (int) params.getProperty ("id");
+            }
+
+            if (row < 0)
+                return error ("option_not_found", "ListBox option not found: " + text);
+
+            if (auto* model = listBox.getListBoxModel())
+            {
+                if (row >= model->getNumRows())
+                    return error ("option_not_found", "ListBox row is out of range: " + juce::String (row));
+            }
+
+            listBox.selectRow (row, false, true);
+            return snapshotAfterAction();
         }
 
         juce::var selectTab (juce::DynamicObject& params)
