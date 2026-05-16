@@ -389,10 +389,17 @@ namespace melatonin
             if (target != nullptr)
                 target->grabKeyboardFocus();
 
+            const auto keyCode = keyCodeForName (key);
+            const auto textCharacter = key.length() == 1 ? key[0] : juce::juce_wchar();
+
+            if (auto* editor = dynamic_cast<juce::TextEditor*> (target))
+            {
+                editor->keyPressed (juce::KeyPress (keyCode, juce::ModifierKeys(), textCharacter));
+                return snapshotAfterAction();
+            }
+
             if (auto* peer = getRootPeer())
             {
-                const auto keyCode = keyCodeForName (key);
-                const auto textCharacter = key.length() == 1 ? key[0] : juce::juce_wchar();
                 peer->handleKeyPress (keyCode, textCharacter);
             }
 
@@ -412,16 +419,7 @@ namespace melatonin
             auto start = getRootBounds (*target).getCentre();
             auto end = start.translated (getInt (params, "dx", 0), getInt (params, "dy", 0));
 
-            if (auto* peer = getRootPeer())
-            {
-                auto peerStart = peer->getComponent().getLocalPoint (root, start).toFloat();
-                auto peerEnd = peer->getComponent().getLocalPoint (root, end).toFloat();
-                auto now = juce::Time::currentTimeMillis();
-                peer->handleMouseEvent (juce::MouseInputSource::InputSourceType::mouse, peerStart, juce::ModifierKeys(), 0.0f, 0.0f, now);
-                peer->handleMouseEvent (juce::MouseInputSource::InputSourceType::mouse, peerStart, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0.0f, now + 1);
-                peer->handleMouseEvent (juce::MouseInputSource::InputSourceType::mouse, peerEnd, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0.0f, now + 16);
-                peer->handleMouseEvent (juce::MouseInputSource::InputSourceType::mouse, peerEnd, juce::ModifierKeys(), 0.0f, 0.0f, now + 17);
-            }
+            synthesizeDragOn (*target, start, end);
 
             return snapshotAfterAction();
         }
@@ -522,6 +520,66 @@ namespace melatonin
 
             auto bounds = getRootBounds (target);
             synthesizeClickAt (bounds.getCentre());
+        }
+
+        void synthesizeDragOn (juce::Component& target, juce::Point<int> rootStart, juce::Point<int> rootEnd)
+        {
+            if (root == nullptr)
+                return;
+
+            auto start = target.getLocalPoint (root, rootStart).toFloat();
+            auto end = target.getLocalPoint (root, rootEnd).toFloat();
+            auto source = juce::Desktop::getInstance().getMainMouseSource();
+            auto now = juce::Time::getCurrentTime();
+            auto downModifiers = juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier);
+
+            target.mouseDown ({ source,
+                                start,
+                                downModifiers,
+                                1.0f,
+                                0.0f,
+                                0.0f,
+                                0.0f,
+                                0.0f,
+                                &target,
+                                &target,
+                                now,
+                                start,
+                                now,
+                                1,
+                                false });
+
+            target.mouseDrag ({ source,
+                                end,
+                                downModifiers,
+                                1.0f,
+                                0.0f,
+                                0.0f,
+                                0.0f,
+                                0.0f,
+                                &target,
+                                &target,
+                                now + juce::RelativeTime::milliseconds (16),
+                                start,
+                                now,
+                                1,
+                                true });
+
+            target.mouseUp ({ source,
+                              end,
+                              juce::ModifierKeys(),
+                              0.0f,
+                              0.0f,
+                              0.0f,
+                              0.0f,
+                              0.0f,
+                              &target,
+                              &target,
+                              now + juce::RelativeTime::milliseconds (17),
+                              start,
+                              now,
+                              1,
+                              true });
         }
 
         juce::Component* findComponentAt (juce::Component& component, juce::Point<int> localPoint) const

@@ -43,12 +43,32 @@ async function main() {
   runCli(["-s", sessionName, "screenshot", "--target", "root", "--file", rootPng]);
   assertPng(rootPng, "root screenshot");
 
+  clickXYAtNode(findByComponentName(snapshot.tree, "controls.power"));
+  snapshot = readSnapshot();
+  assert(findByComponentName(snapshot.tree, "controls.power").toggleState === true, "click-xy did not toggle the power button");
+  assertStatus(snapshot, "Status: Power On");
+
+  const sliderBefore = Number(findByComponentName(snapshot.tree, "controls.slider").value);
+  dragRef(refByComponentName(snapshot.tree, "controls.slider"), 90, 0);
+  snapshot = readSnapshot();
+  const sliderAfter = Number(findByComponentName(snapshot.tree, "controls.slider").value);
+  assert(sliderAfter > sliderBefore, `slider drag did not increase value: ${sliderBefore} -> ${sliderAfter}`);
+  assertStatus(snapshot, "Status: Slider");
+
   clickRef(refByComponentName(snapshot.tree, "nav.editor"));
   snapshot = readSnapshot();
   assertStatus(snapshot, "Status: Editor");
   assert(findByComponentName(snapshot.tree, "editor.text"), "editor page did not expose its text editor");
 
-  typeRef(refByComponentName(snapshot.tree, "editor.text"), "hello from automation");
+  const editorRef = refByComponentName(snapshot.tree, "editor.text");
+  typeRef(editorRef, "hello from automation");
+  pressRef(editorRef, "!");
+  snapshot = readSnapshot();
+  clickRef(refByComponentName(snapshot.tree, "editor.apply"));
+  snapshot = readSnapshot();
+  assertStatus(snapshot, "Status: Applied hello from automation!");
+
+  pressRef(refByComponentName(snapshot.tree, "editor.text"), "backspace");
   snapshot = readSnapshot();
   clickRef(refByComponentName(snapshot.tree, "editor.apply"));
   snapshot = readSnapshot();
@@ -63,6 +83,15 @@ async function main() {
   snapshot = readSnapshot();
   assertStatus(snapshot, "Status: Nested Actions");
   assert(findByComponentName(snapshot.tree, "advanced.reset"), "nested Actions tab did not expose Reset All");
+  assert(findByComponentName(snapshot.tree, "advanced.dragBox"), "nested Actions tab did not expose Drag Box");
+
+  const dragBoxBefore = findByComponentName(snapshot.tree, "advanced.dragBox");
+  dragRef(dragBoxBefore.ref, 40, 15);
+  snapshot = readSnapshot();
+  const dragBoxAfter = findByComponentName(snapshot.tree, "advanced.dragBox");
+  assert(dragBoxAfter.bounds.x === dragBoxBefore.bounds.x + 40, "drag did not move Drag Box on the x axis");
+  assert(dragBoxAfter.bounds.y === dragBoxBefore.bounds.y + 15, "drag did not move Drag Box on the y axis");
+  assertStatus(snapshot, "Status: DragBox");
 
   const resetRef = refByComponentName(snapshot.tree, "advanced.reset");
   runCli(["-s", sessionName, "set-bounds", resetRef, "--x", "20", "--y", "24", "--w", "180", "--h", "34"]);
@@ -115,8 +144,27 @@ function clickRef(ref) {
   runCli(["-s", sessionName, "click", ref]);
 }
 
+function clickXYAtNode(node) {
+  assert(node && node.bounds, "click-xy target node is missing bounds");
+  runCli([
+    "-s",
+    sessionName,
+    "click-xy",
+    String(Math.round(node.bounds.x + node.bounds.w / 2)),
+    String(Math.round(node.bounds.y + node.bounds.h / 2)),
+  ]);
+}
+
 function typeRef(ref, text) {
   runCli(["-s", sessionName, "type", ref, text]);
+}
+
+function pressRef(ref, key) {
+  runCli(["-s", sessionName, "press", key, "--ref", ref]);
+}
+
+function dragRef(ref, dx, dy) {
+  runCli(["-s", sessionName, "drag", ref, "--dx", String(dx), "--dy", String(dy)]);
 }
 
 async function waitForSession() {

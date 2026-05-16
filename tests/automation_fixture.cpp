@@ -74,6 +74,40 @@ namespace
         juce::Label title;
     };
 
+    class DragBox : public juce::Component
+    {
+    public:
+        DragBox()
+        {
+            setName ("advanced.dragBox");
+        }
+
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (juce::Colours::darkslategrey);
+            g.setColour (juce::Colours::white);
+            g.drawFittedText ("Drag Box", getLocalBounds(), juce::Justification::centred, 1);
+        }
+
+        void mouseDown (const juce::MouseEvent&) override
+        {
+            dragStartBounds = getBounds();
+        }
+
+        void mouseDrag (const juce::MouseEvent& event) override
+        {
+            setBounds (dragStartBounds.translated (event.getDistanceFromDragStartX(), event.getDistanceFromDragStartY()));
+
+            if (onDragged)
+                onDragged (getBounds());
+        }
+
+        std::function<void (juce::Rectangle<int>)> onDragged;
+
+    private:
+        juce::Rectangle<int> dragStartBounds;
+    };
+
     class EditorPage : public juce::Component
     {
     public:
@@ -143,6 +177,8 @@ namespace
             reset.setName ("advanced.reset");
             actions.addAndMakeVisible (reset);
 
+            actions.addAndMakeVisible (dragBox);
+
             goActions.onClick = [this] {
                 nestedTabs.setCurrentTabIndex (1);
             };
@@ -163,11 +199,13 @@ namespace
             goActions.setBounds (metricsArea.removeFromTop (34).removeFromLeft (140));
 
             reset.setBounds (actions.getLocalBounds().reduced (16).removeFromTop (34).removeFromLeft (140));
+            dragBox.setBounds (240, 24, 100, 42);
         }
 
         CallbackTabbedComponent nestedTabs { juce::TabbedButtonBar::TabsAtTop };
         juce::TextButton goActions;
         juce::TextButton reset;
+        DragBox dragBox;
         std::function<void (const juce::String&)> onNestedTabChanged;
 
     private:
@@ -198,6 +236,14 @@ namespace
                 setStatus ("Status: Editor");
             };
 
+            controls.toggle.onClick = [this] {
+                setStatus (controls.toggle.getToggleState() ? "Status: Power On" : "Status: Power Off");
+            };
+
+            controls.slider.onValueChange = [this] {
+                setStatus ("Status: Slider " + juce::String (juce::roundToInt (controls.slider.getValue())));
+            };
+
             editor.apply.onClick = [this] {
                 setStatus ("Status: Applied " + editor.text.getText());
             };
@@ -216,6 +262,10 @@ namespace
 
             advanced.onNestedTabChanged = [this] (const juce::String& name) {
                 setStatus ("Status: Nested " + name);
+            };
+
+            advanced.dragBox.onDragged = [this] (juce::Rectangle<int> bounds) {
+                setStatus ("Status: DragBox " + juce::String (bounds.getX()) + "," + juce::String (bounds.getY()));
             };
 
             tabs.onCurrentTabChanged = [this] (int index, const juce::String& name) {

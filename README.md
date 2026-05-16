@@ -332,7 +332,7 @@ There is also a dependency-free MCP adapter at `tools/melatonin_mcp.js`. Configu
 
 ### Automation end-to-end test
 
-The repo includes `tests/automation_fixture.cpp`, a small JUCE app with top-level tabs, nested tabs, a `TextEditor`, buttons, a slider, and mutation targets. It is intended to prove that the automation endpoint can navigate between pages, type into controls, mutate bounds/properties, capture screenshots, and serve the same app through both the CLI and MCP adapter.
+The repo includes `tests/automation_fixture.cpp`, a small JUCE app with top-level tabs, nested tabs, a `TextEditor`, buttons, a slider, a draggable component, and mutation targets. It is intended to prove that the automation endpoint can navigate between pages, click by ref and coordinates, type and press keys in text controls, drag sliders and components, mutate bounds/properties, capture screenshots, and serve the same app through both the CLI and MCP adapter.
 
 Build and run it with automation enabled:
 
