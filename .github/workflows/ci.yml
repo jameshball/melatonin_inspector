@@ -44,6 +44,7 @@ jobs:
           - { app: unique_ptr_enabled,  os: ubuntu-latest, juce: JUCE7 }
           - { app: unique_ptr_disabled, os: ubuntu-latest, juce: JUCE8 }
           - { app: member_enabled,      os: ubuntu-latest, juce: JUCE8 }
+          - { app: automation_fixture,  os: ubuntu-latest, juce: JUCE8, automation_e2e: true }
 
     steps:
       - name: Checkout
@@ -68,7 +69,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt install libasound2-dev libx11-dev libxcomposite-dev libxcursor-dev libxext-dev libxinerama-dev libxrandr-dev libxrender-dev libfontconfig1-dev libfreetype-dev libglu1-mesa-dev libjack-jackd2-dev ninja-build
+          sudo apt install libasound2-dev libx11-dev libxcomposite-dev libxcursor-dev libxext-dev libxinerama-dev libxrandr-dev libxrender-dev libfontconfig1-dev libfreetype-dev libglu1-mesa-dev libjack-jackd2-dev ninja-build xvfb
 
       # This block can be removed once 15.1 is default (JUCE requires it when building on macOS 14)
       - name: Use latest Xcode on system (macOS)
@@ -83,23 +84,39 @@ jobs:
       - name: Configure (Windows without Ninja)
         if: runner.os == 'Windows'
         run: |
+          automation_flags=""
+          if [ "${{ matrix.automation_e2e }}" == "true" ]; then
+            automation_flags="-DMELATONIN_INSPECTOR_ENABLE_AUTOMATION=ON -DMELATONIN_INSPECTOR_BUILD_CLI=ON"
+          fi
+
           if [ "${{ matrix.juce }}" == "JUCE7" ]; then
-            cmake -B Builds -DTARGET_NAME:STRING=${{ matrix.app }} -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache . -DJUCE7=ON
+            cmake -B Builds -DTARGET_NAME:STRING=${{ matrix.app }} -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache $automation_flags . -DJUCE7=ON
           else 
-            cmake -B Builds -DTARGET_NAME:STRING=${{ matrix.app }} -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache .
+            cmake -B Builds -DTARGET_NAME:STRING=${{ matrix.app }} -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache $automation_flags .
           fi
 
       - name: Configure (Non-Windows with Ninja)
         if: runner.os != 'Windows'
         run: |
+            automation_flags=""
+            if [ "${{ matrix.automation_e2e }}" == "true" ]; then
+              automation_flags="-DMELATONIN_INSPECTOR_ENABLE_AUTOMATION=ON -DMELATONIN_INSPECTOR_BUILD_CLI=ON"
+            fi
+
             if [ "${{ matrix.juce }}" == "JUCE7" ]; then
-              cmake -B Builds -G Ninja -DTARGET_NAME:STRING=${{ matrix.app }} -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache . -DJUCE7=ON
+              cmake -B Builds -G Ninja -DTARGET_NAME:STRING=${{ matrix.app }} -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache $automation_flags . -DJUCE7=ON
             else 
-              cmake -B Builds -G Ninja -DTARGET_NAME:STRING=${{ matrix.app }} -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache .
+              cmake -B Builds -G Ninja -DTARGET_NAME:STRING=${{ matrix.app }} -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache $automation_flags .
             fi
 
       - name: Build
         run: cmake --build Builds --parallel 4
+
+      - name: Run automation e2e
+        if: ${{ matrix.automation_e2e == true && runner.os == 'Linux' }}
+        env:
+          MELATONIN_AUTOMATION_BUILD_DIR: ${{ github.workspace }}/Builds
+        run: xvfb-run -a node tests/automation_e2e.js
 
       - name: Run
         if: ${{ matrix.os == 'macos-latest' }}

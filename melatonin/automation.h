@@ -1,11 +1,13 @@
 #pragma once
 
 #include "helpers/component_helpers.h"
+#include <atomic>
 #include <cstdlib>
 #include <string>
 #if JUCE_WINDOWS
     #include <windows.h>
 #else
+    #include <sys/stat.h>
     #include <unistd.h>
 #endif
 
@@ -60,7 +62,14 @@ namespace melatonin
             if (listener)
                 listener->close();
 
-            waitForThreadToExit (2000);
+            {
+                const juce::ScopedLock lock (activeClientLock);
+
+                if (activeClient != nullptr)
+                    activeClient->close();
+            }
+
+            waitForThreadToStop();
             removeAdvertisement();
         }
 
@@ -102,6 +111,8 @@ namespace melatonin
         juce::Component::SafePointer<juce::Component> root;
         AutomationOptions options;
         std::unique_ptr<juce::StreamingSocket> listener;
+        juce::CriticalSection activeClientLock;
+        juce::StreamingSocket* activeClient = nullptr;
         int boundPort = -1;
         juce::File advertisementFile;
         juce::Array<ComponentRef> refs;
@@ -123,9 +134,21 @@ namespace melatonin
 
         void handleClient (juce::StreamingSocket& client)
         {
+            {
+                const juce::ScopedLock lock (activeClientLock);
+                activeClient = &client;
+            }
+
             auto requestLine = readLine (client);
             auto response = handleRequest (requestLine);
             writeLine (client, response);
+
+            {
+                const juce::ScopedLock lock (activeClientLock);
+
+                if (activeClient == &client)
+                    activeClient = nullptr;
+            }
         }
 
         juce::String readLine (juce::StreamingSocket& client)
@@ -186,7 +209,7 @@ namespace melatonin
                 paramsObject = &emptyParams;
 
             if (method == "wait")
-                juce::Thread::sleep (juce::jlimit (0, 30000, getInt (*paramsObject, "ms", 250)));
+                sleepUntilReadyOrStopped (juce::jlimit (0, 30000, getInt (*paramsObject, "ms", 250)));
 
             auto result = callOnMessageThread ([this, method, paramsObject]() {
                 return dispatch (method, *paramsObject);
@@ -274,7 +297,7 @@ namespace melatonin
             if (ref.isNotEmpty() && target == nullptr)
                 return error ("stale_ref", "Run snapshot again.");
 
-            if (targetName == "root" || target == nullptr)
+            if (ref.isEmpty() && (targetName == "root" || target == nullptr))
                 target = root.getComponent();
 
             if (target == nullptr)
@@ -326,6 +349,9 @@ namespace melatonin
             if (target == nullptr)
                 return error ("stale_ref", "Run snapshot again.");
 
+            if (auto validationError = validateInputTarget (*target); !validationError.isVoid())
+                return validationError;
+
             activateComponent (*target);
             return snapshotAfterAction();
         }
@@ -340,9 +366,19 @@ namespace melatonin
             if (root != nullptr)
             {
                 if (auto* target = findComponentAt (*root, rootPoint))
-                    activateComponent (*target);
+                {
+                    if (target->isEnabled())
+                    {
+                        if (auto* button = dynamic_cast<juce::Button*> (target))
+                            button->triggerClick();
+                        else
+                            synthesizeClickAt (rootPoint);
+                    }
+                }
                 else
+                {
                     synthesizeClickAt (rootPoint);
+                }
             }
 
             return snapshotAfterAction();
@@ -357,6 +393,9 @@ namespace melatonin
 
             if (target == nullptr)
                 return error ("stale_ref", "Run snapshot again.");
+
+            if (auto validationError = validateInputTarget (*target); !validationError.isVoid())
+                return validationError;
 
             target->grabKeyboardFocus();
             const auto text = getString (params, "text", {});
@@ -387,7 +426,12 @@ namespace melatonin
             auto* target = getTargetComponent (getString (params, "ref", {}));
 
             if (target != nullptr)
+            {
+                if (auto validationError = validateInputTarget (*target); !validationError.isVoid())
+                    return validationError;
+
                 target->grabKeyboardFocus();
+            }
 
             const auto keyCode = keyCodeForName (key);
             const auto textCharacter = key.length() == 1 ? key[0] : juce::juce_wchar();
@@ -415,6 +459,9 @@ namespace melatonin
 
             if (target == nullptr)
                 return error ("stale_ref", "Run snapshot again.");
+
+            if (auto validationError = validateInputTarget (*target); !validationError.isVoid())
+                return validationError;
 
             auto start = getRootBounds (*target).getCentre();
             auto end = start.translated (getInt (params, "dx", 0), getInt (params, "dy", 0));
@@ -520,6 +567,17 @@ namespace melatonin
 
             auto bounds = getRootBounds (target);
             synthesizeClickAt (bounds.getCentre());
+        }
+
+        juce::var validateInputTarget (juce::Component& target) const
+        {
+            if (!target.isShowing())
+                return error ("target_not_showing", "Target component is not showing.");
+
+            if (!target.isEnabled())
+                return error ("target_disabled", "Target component is disabled.");
+
+            return {};
         }
 
         void synthesizeDragOn (juce::Component& target, juce::Point<int> rootStart, juce::Point<int> rootEnd)
@@ -633,7 +691,7 @@ namespace melatonin
         juce::var serializeComponent (juce::Component& component, int depth, int maxDepth)
         {
             auto* node = new juce::DynamicObject();
-            auto ref = "m" + juce::String (refs.size() + 1);
+            auto ref = "m" + juce::String (generation) + "-" + juce::String (refs.size() + 1);
             refs.add ({ ref, &component });
 
             node->setProperty ("ref", ref);
@@ -827,17 +885,52 @@ namespace melatonin
 
             struct Call
             {
+                explicit Call (std::function<juce::var()> fn)
+                    : function (std::move (fn))
+                {
+                }
+
                 std::function<juce::var()> function;
                 juce::var result;
-            } call { std::move (function), {} };
+                juce::WaitableEvent completed;
+                std::atomic<bool> cancelled { false };
+            };
 
-            juce::MessageManager::getInstance()->callFunctionOnMessageThread ([] (void* data) -> void* {
-                auto* c = static_cast<Call*> (data);
-                c->result = c->function();
-                return nullptr;
-            }, &call);
+            auto call = std::make_shared<Call> (std::move (function));
 
-            return call.result;
+            if (!juce::MessageManager::callAsync ([call] {
+                    if (!call->cancelled.load())
+                        call->result = call->function();
+
+                    call->completed.signal();
+                }))
+            {
+                return error ("message_thread_unavailable", "Could not post automation request to the JUCE message thread.");
+            }
+
+            while (!threadShouldExit())
+                if (call->completed.wait (25))
+                    return call->result;
+
+            call->cancelled = true;
+            return error ("shutting_down", "Automation endpoint is shutting down.");
+        }
+
+        void sleepUntilReadyOrStopped (int milliseconds)
+        {
+            auto remaining = milliseconds;
+
+            while (remaining > 0 && !threadShouldExit())
+            {
+                const auto chunk = juce::jmin (remaining, 25);
+                juce::Thread::sleep (chunk);
+                remaining -= chunk;
+            }
+        }
+
+        void waitForThreadToStop()
+        {
+            waitForThreadToExit (-1);
         }
 
         static juce::var object (std::initializer_list<std::pair<juce::String, juce::var>> properties)
@@ -902,7 +995,17 @@ namespace melatonin
                                  .getChildFile ("melatonin_inspector")
                                  .getChildFile ("sessions");
             directory.createDirectory();
+            restrictFilePermissions (directory, 0700);
             return directory;
+        }
+
+        static void restrictFilePermissions (const juce::File& file, int permissions)
+        {
+#if JUCE_WINDOWS
+            juce::ignoreUnused (file, permissions);
+#else
+            ::chmod (file.getFullPathName().toRawUTF8(), (mode_t) permissions);
+#endif
         }
 
         void writeAdvertisement()
@@ -924,6 +1027,7 @@ namespace melatonin
             data->setProperty ("createdAt", juce::Time::getCurrentTime().toISO8601 (true));
 
             advertisementFile.replaceWithText (juce::JSON::toString (juce::var (data), true));
+            restrictFilePermissions (advertisementFile, 0600);
         }
 
         static int currentProcessId()

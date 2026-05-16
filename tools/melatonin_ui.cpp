@@ -20,6 +20,15 @@ namespace
             .getChildFile ("sessions");
     }
 
+    bool canConnect (juce::DynamicObject& session)
+    {
+        juce::StreamingSocket socket;
+        const auto host = session.getProperty ("host").toString();
+        const auto port = (int) session.getProperty ("port");
+
+        return host.isNotEmpty() && port > 0 && socket.connect (host, port, 250);
+    }
+
     juce::Array<juce::var> loadSessions()
     {
         juce::Array<juce::var> sessions;
@@ -32,7 +41,9 @@ namespace
             {
                 session->setProperty ("file", file.getFullPathName());
                 session->setProperty ("modifiedAtMs", (double) file.getLastModificationTime().toMilliseconds());
-                sessions.add (parsed);
+
+                if (canConnect (*session))
+                    sessions.add (parsed);
             }
         }
 
@@ -45,6 +56,9 @@ namespace
 
         if (requestedName.isEmpty() && sessions.size() == 1)
             return sessions.getFirst();
+
+        if (requestedName.isEmpty())
+            return {};
 
         juce::var bestMatch;
         double bestModifiedAt = -1.0;
@@ -219,7 +233,7 @@ namespace
             << "Usage:\n"
             << "  melatonin-ui list\n"
             << "  melatonin-ui -s <session> snapshot [--format text|json] [--depth n]\n"
-            << "  melatonin-ui -s <session> screenshot [--target root|--ref m1] --file /tmp/root.png\n"
+            << "  melatonin-ui -s <session> screenshot [--target root|--ref m1-1] --file /tmp/root.png\n"
             << "  melatonin-ui -s <session> click <ref>\n"
             << "  melatonin-ui -s <session> click-xy <x> <y>\n"
             << "  melatonin-ui -s <session> type <ref> <text>\n"

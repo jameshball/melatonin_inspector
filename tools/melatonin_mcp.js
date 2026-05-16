@@ -24,10 +24,44 @@ function loadSessions() {
   }
 }
 
-function findSession(name) {
-  const sessions = loadSessions();
+function isSessionReachable(session, timeoutMs = 250) {
+  return new Promise((resolve) => {
+    if (!session.host || !session.port) {
+      resolve(false);
+      return;
+    }
+
+    const socket = net.createConnection({ host: session.host, port: session.port });
+    let settled = false;
+
+    function finish(result) {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(result);
+    }
+
+    socket.setTimeout(timeoutMs);
+    socket.on("connect", () => finish(true));
+    socket.on("timeout", () => finish(false));
+    socket.on("error", () => finish(false));
+  });
+}
+
+async function liveSessions() {
+  const checked = await Promise.all(
+    loadSessions().map(async (session) => ((await isSessionReachable(session)) ? session : undefined))
+  );
+
+  return checked.filter(Boolean);
+}
+
+async function findSession(name) {
+  const sessions = await liveSessions();
 
   if (!name && sessions.length === 1) return sessions[0];
+  if (!name) return undefined;
+
   return sessions
     .filter((s) => s.session === name || s.file.includes(name))
     .sort((a, b) => b.modifiedAtMs - a.modifiedAtMs)[0];
@@ -40,23 +74,40 @@ function endpointRequest(session, method, params = {}) {
     });
 
     let buffer = "";
+    let settled = false;
+
+    function finish(error, result) {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+
+      if (error) reject(error);
+      else resolve(result);
+    }
+
     socket.setTimeout(10000);
     socket.on("data", (data) => {
       buffer += data.toString("utf8");
       const newline = buffer.indexOf("\n");
       if (newline < 0) return;
 
-      socket.end();
-      const response = JSON.parse(buffer.slice(0, newline));
+      let response;
+
+      try {
+        response = JSON.parse(buffer.slice(0, newline));
+      } catch (error) {
+        finish(error);
+        return;
+      }
 
       if (!response.ok) {
-        reject(new Error(response.error?.message || "melatonin automation error"));
+        finish(new Error(response.error?.message || "melatonin automation error"));
       } else {
-        resolve(response.result);
+        finish(undefined, response.result);
       }
     });
-    socket.on("timeout", () => reject(new Error("Timed out waiting for melatonin automation endpoint")));
-    socket.on("error", reject);
+    socket.on("timeout", () => finish(new Error("Timed out waiting for melatonin automation endpoint")));
+    socket.on("error", finish);
   });
 }
 
@@ -144,11 +195,11 @@ function send(message) {
 async function callTool(name, args = {}) {
   if (name === "juce_list_sessions") {
     return {
-      content: [{ type: "text", text: JSON.stringify(loadSessions(), null, 2) }],
+      content: [{ type: "text", text: JSON.stringify(await liveSessions(), null, 2) }],
     };
   }
 
-  const session = findSession(args.session);
+  const session = await findSession(args.session);
   if (!session) throw new Error(`No melatonin_inspector automation session found${args.session ? ` for '${args.session}'` : ""}`);
 
   const map = {
@@ -164,13 +215,22 @@ async function callTool(name, args = {}) {
     juce_wait: "wait",
   };
 
-  const result = await endpointRequest(session, map[name], args);
+  const method = map[name];
+  if (!method) throw new Error(`Unknown melatonin MCP tool: ${name}`);
+
+  const result = await endpointRequest(session, method, args);
 
   if (name === "juce_screenshot") {
     const content = [];
     if (result.file) content.push({ type: "text", text: result.file });
     if (result.base64) content.push({ type: "image", data: result.base64, mimeType: result.mimeType || "image/png" });
     return { content };
+  }
+
+  if (name === "juce_snapshot" && args.format === "json") {
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
   }
 
   return {
@@ -183,9 +243,11 @@ const rl = readline.createInterface({ input: process.stdin });
 rl.on("line", async (line) => {
   if (!line.trim()) return;
 
-  const request = JSON.parse(line);
+  let request;
 
   try {
+    request = JSON.parse(line);
+
     if (request.method === "initialize") {
       send({
         jsonrpc: "2.0",
@@ -212,6 +274,6 @@ rl.on("line", async (line) => {
 
     if (request.id !== undefined) send({ jsonrpc: "2.0", id: request.id, result: {} });
   } catch (error) {
-    send({ jsonrpc: "2.0", id: request.id, error: { code: -32000, message: error.message } });
+    send({ jsonrpc: "2.0", id: request?.id ?? null, error: { code: -32000, message: error.message } });
   }
 });

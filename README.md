@@ -323,10 +323,12 @@ The endpoint advertises itself in your system temp directory and is controlled w
 melatonin-ui list
 melatonin-ui -s MyPlugin snapshot
 melatonin-ui -s MyPlugin screenshot --target root --file /tmp/my-plugin.png
-melatonin-ui -s MyPlugin click m4
-melatonin-ui -s MyPlugin type m8 "hello"
-melatonin-ui -s MyPlugin set-bounds m12 --x 20 --y 40 --w 200 --h 48
+melatonin-ui -s MyPlugin click m1-4
+melatonin-ui -s MyPlugin type m1-8 "hello"
+melatonin-ui -s MyPlugin set-bounds m1-12 --x 20 --y 40 --w 200 --h 48
 ```
+
+Refs are scoped to the latest snapshot generation, so take a fresh snapshot before issuing actions and use the refs from that snapshot.
 
 There is also a dependency-free MCP adapter at `tools/melatonin_mcp.js`. Configure an MCP client to launch it with Node, then use the `juce_snapshot`, `juce_screenshot`, `juce_click`, `juce_type`, and related tools against the same running automation session.
 

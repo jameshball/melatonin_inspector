@@ -33,7 +33,7 @@ async function main() {
   await waitForSession();
 
   const listOutput = runCli(["list"]);
-  assert(listOutput.includes(sessionName), "CLI list did not show automation_fixture");
+  assert(hasCurrentSession(listOutput), "CLI list did not show the launched automation_fixture process");
 
   let snapshot = readSnapshot();
   assert(findByComponentName(snapshot.tree, "fixture.tabs"), "snapshot is missing top-level tabs");
@@ -42,6 +42,12 @@ async function main() {
   const rootPng = path.join(screenshotDir, "melatonin-automation-e2e-root.png");
   runCli(["-s", sessionName, "screenshot", "--target", "root", "--file", rootPng]);
   assertPng(rootPng, "root screenshot");
+
+  const buttonPng = path.join(screenshotDir, "melatonin-automation-e2e-button.png");
+  const editorButton = findByComponentName(snapshot.tree, "nav.editor");
+  runCli(["-s", sessionName, "screenshot", "--ref", editorButton.ref, "--file", buttonPng]);
+  assertPng(buttonPng, "button screenshot");
+  assertPngSize(buttonPng, editorButton.bounds.w, editorButton.bounds.h, "button screenshot");
 
   clickXYAtNode(findByComponentName(snapshot.tree, "controls.power"));
   snapshot = readSnapshot();
@@ -62,7 +68,8 @@ async function main() {
 
   const editorRef = refByComponentName(snapshot.tree, "editor.text");
   typeRef(editorRef, "hello from automation");
-  pressRef(editorRef, "!");
+  snapshot = readSnapshot();
+  pressRef(refByComponentName(snapshot.tree, "editor.text"), "!");
   snapshot = readSnapshot();
   clickRef(refByComponentName(snapshot.tree, "editor.apply"));
   snapshot = readSnapshot();
@@ -100,7 +107,8 @@ async function main() {
   assert(resetAfterBounds.bounds.w === 180 && resetAfterBounds.bounds.h === 34, "set-bounds did not update Reset All dimensions");
 
   runCli(["-s", sessionName, "set-property", resetAfterBounds.ref, "alpha", "0.9"]);
-  clickRef(resetAfterBounds.ref);
+  snapshot = readSnapshot();
+  clickRef(refByComponentName(snapshot.tree, "advanced.reset"));
   snapshot = readSnapshot();
   assertStatus(snapshot, "Status: Reset");
 
@@ -172,7 +180,7 @@ async function waitForSession() {
 
   while (Date.now() < deadline) {
     const listOutput = runCli(["list"]);
-    if (listOutput.includes(sessionName)) {
+    if (hasCurrentSession(listOutput)) {
       return;
     }
 
@@ -180,6 +188,12 @@ async function waitForSession() {
   }
 
   throw new Error(`Timed out waiting for ${sessionName} to advertise an automation session`);
+}
+
+function hasCurrentSession(listOutput) {
+  return listOutput
+    .split(/\r?\n/)
+    .some((line) => line.startsWith(`${sessionName} `) && line.includes(`pid=${appProcess.pid}`));
 }
 
 async function runMcpChecks() {
@@ -197,6 +211,13 @@ async function runMcpChecks() {
       arguments: { session: sessionName, format: "text", depth: 12 },
     });
     assert(snapshotResult.content[0].text.includes("Automation Fixture Root"), "MCP snapshot did not include the fixture root");
+
+    const jsonSnapshotResult = await mcp.request("tools/call", {
+      name: "juce_snapshot",
+      arguments: { session: sessionName, format: "json", depth: 12 },
+    });
+    const jsonSnapshot = JSON.parse(jsonSnapshotResult.content[0].text);
+    assert(Array.isArray(jsonSnapshot.tree.children), "MCP JSON snapshot did not return the JSON tree");
 
     const mcpPng = path.join(screenshotDir, "melatonin-automation-e2e-mcp.png");
     const screenshotResult = await mcp.request("tools/call", {
@@ -334,6 +355,19 @@ function assertPng(file, label) {
   assert(bytes.length > 1000, `${label} is unexpectedly small: ${bytes.length} bytes`);
 }
 
+function assertPngSize(file, width, height, label) {
+  const size = pngSize(file);
+  assert(size.width === width && size.height === height, `${label} expected ${width}x${height}, got ${size.width}x${size.height}`);
+}
+
+function pngSize(file) {
+  const bytes = fs.readFileSync(file);
+  return {
+    width: bytes.readUInt32BE(16),
+    height: bytes.readUInt32BE(20),
+  };
+}
+
 function cleanupSessionFiles() {
   const dir = path.join(os.tmpdir(), "melatonin_inspector", "sessions");
 
@@ -355,7 +389,7 @@ function cleanupSessionFiles() {
 }
 
 async function stopApp() {
-  if (!appProcess || appProcess.killed) {
+  if (!appProcess || appProcess.killed || appProcess.exitCode !== null || appProcess.signalCode !== null) {
     return;
   }
 
