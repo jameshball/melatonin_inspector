@@ -137,6 +137,14 @@ Full deterministic allowlist:
 - Select one deterministic Audio demo: AudioSettingsDemo.
 - Select one deterministic DSP demo: GainDemo.
 - Select deterministic Utilities demos: ValueTreesDemo and XMLandJSONDemo.
+- Each selected demo must perform at least one meaningful interaction on the
+  demo surface itself, not only open the file and switch to the Code tab.
+  Semantic controls should assert their new values; visual-only demos should
+  capture before/after evidence and assert the pixels changed.
+- DialogsDemo must open a non-native `AlertWindow`, prove it appears in
+  `windows`, capture it with component screenshots, fill its text editor,
+  select its combo box, click the primary button, and dismiss the follow-up
+  result dialog through window-local coordinate input.
 - Select heavyweight OpenGLDemo and capture both root evidence and a native
   clipped OpenGL scene screenshot.
 - Switch Demo, Code, and Settings tabs.
@@ -171,6 +179,8 @@ C++ DemoRunner E2E self-test:
 - snapshots root.
 - navigates side panel.
 - selects deterministic demos across GUI, Audio, DSP, and Utilities categories.
+- interacts with each selected deterministic demo using real exposed controls,
+  pointer input, keyboard input, drag/scroll, or layout resizing as appropriate.
 - selects heavyweight OpenGLDemo and captures native screenshot evidence.
 - performs semantic actions from earlier workstreams.
 - runs representative MCP snapshot and screenshot calls.

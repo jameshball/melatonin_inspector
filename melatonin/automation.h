@@ -116,6 +116,13 @@ namespace melatonin
             juce::var error;
         };
 
+        struct AutomationWindow
+        {
+            juce::String id;
+            juce::Component::SafePointer<juce::Component> component;
+            bool attachedRoot = false;
+        };
+
         juce::Component::SafePointer<juce::Component> root;
         AutomationOptions options;
         std::unique_ptr<juce::StreamingSocket> listener;
@@ -567,13 +574,25 @@ namespace melatonin
         {
             juce::Array<juce::var> result;
 
-            if (root != nullptr)
+            for (auto& window : automationWindows())
             {
+                auto* component = window.component.getComponent();
+
+                if (component == nullptr)
+                    continue;
+
                 result.add (object ({ { "id", "root" },
-                                      { "title", componentString (root.getComponent()) },
-                                      { "root", componentString (root.getComponent()) },
-                                      { "focused", root->hasKeyboardFocus (true) },
-                                      { "bounds", rectangleToVar (root->getScreenBounds()) } }));
+                                      { "title", componentString (component) },
+                                      { "root", componentString (component) },
+                                      { "class", type (*component) },
+                                      { "attachedRoot", window.attachedRoot },
+                                      { "focused", component->hasKeyboardFocus (true) },
+                                      { "bounds", rectangleToVar (component->getScreenBounds()) } }));
+
+                auto* object = result.getReference (result.size() - 1).getDynamicObject();
+
+                if (object != nullptr)
+                    object->setProperty ("id", window.id);
             }
 
             return object ({ { "windows", result } });
@@ -625,7 +644,7 @@ namespace melatonin
 
             const auto maxDepth = getInt (params, "depth", 8);
             const auto format = getString (params, "format", "text");
-            auto tree = serializeComponent (*root, 0, juce::jmax (0, maxDepth));
+            auto tree = serializeAutomationTree (juce::jmax (0, maxDepth));
 
             juce::String text;
             appendTextSnapshot (text, tree, 0);
@@ -703,6 +722,14 @@ namespace melatonin
 
             if (ref.isNotEmpty() && target == nullptr)
                 return error ("stale_ref", "Run snapshot again.");
+
+            if (!hasTargetSelector (params) && ref.isEmpty() && targetName.isNotEmpty() && targetName != "root")
+            {
+                target = automationWindowForId (targetName);
+
+                if (target == nullptr)
+                    return error ("window_not_found", "No automation window matched target: " + targetName);
+            }
 
             if (!hasTargetSelector (params) && ref.isEmpty() && (targetName == "root" || target == nullptr))
                 target = root.getComponent();
@@ -960,23 +987,28 @@ namespace melatonin
             if (!options.allowInput)
                 return error ("input_disabled", "Automation input is disabled for this session.");
 
+            auto* coordinateRoot = pointerCoordinateRoot (params);
+
+            if (coordinateRoot == nullptr)
+                return error ("window_not_found", "No automation window matched target: " + getString (params, "target", "root"));
+
             const auto rootPoint = juce::Point<int> { getInt (params, "x", 0), getInt (params, "y", 0) };
 
-            if (root != nullptr)
+            if (coordinateRoot != nullptr)
             {
-                if (auto* target = findComponentAt (*root, rootPoint))
+                if (auto* target = findComponentAt (*coordinateRoot, rootPoint))
                 {
                     if (target->isEnabled())
                     {
                         if (auto* button = dynamic_cast<juce::Button*> (target))
                             button->triggerClick();
                         else
-                            synthesizeClickAt (rootPoint);
+                            synthesizeClickAt (*coordinateRoot, rootPoint);
                     }
                 }
                 else
                 {
-                    synthesizeClickAt (rootPoint);
+                    synthesizeClickAt (*coordinateRoot, rootPoint);
                 }
             }
 
@@ -988,7 +1020,12 @@ namespace melatonin
             if (!options.allowInput)
                 return error ("input_disabled", "Automation input is disabled for this session.");
 
-            sendPeerMouseEvent (pointFromParams (params, "x", "y"), juce::ModifierKeys(), 0.0f);
+            auto* coordinateRoot = pointerCoordinateRoot (params);
+
+            if (coordinateRoot == nullptr)
+                return error ("window_not_found", "No automation window matched target: " + getString (params, "target", "root"));
+
+            sendPeerMouseEvent (*coordinateRoot, pointFromParams (params, "x", "y"), juce::ModifierKeys(), 0.0f);
             return snapshotAfterAction();
         }
 
@@ -997,7 +1034,13 @@ namespace melatonin
             if (!options.allowInput)
                 return error ("input_disabled", "Automation input is disabled for this session.");
 
-            sendPeerMouseEvent (pointFromParams (params, "x", "y"),
+            auto* coordinateRoot = pointerCoordinateRoot (params);
+
+            if (coordinateRoot == nullptr)
+                return error ("window_not_found", "No automation window matched target: " + getString (params, "target", "root"));
+
+            sendPeerMouseEvent (*coordinateRoot,
+                                pointFromParams (params, "x", "y"),
                                 isDown ? juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier) : juce::ModifierKeys(),
                                 isDown ? 1.0f : 0.0f);
             return snapshotAfterAction();
@@ -1008,7 +1051,12 @@ namespace melatonin
             if (!options.allowInput)
                 return error ("input_disabled", "Automation input is disabled for this session.");
 
-            if (auto* peer = getRootPeer())
+            auto* coordinateRoot = pointerCoordinateRoot (params);
+
+            if (coordinateRoot == nullptr)
+                return error ("window_not_found", "No automation window matched target: " + getString (params, "target", "root"));
+
+            if (auto* peer = coordinateRoot->getPeer())
             {
                 juce::MouseWheelDetails details;
                 details.deltaX = (float) params.getProperty ("deltaX");
@@ -1017,7 +1065,7 @@ namespace melatonin
                 details.isSmooth = true;
 
                 peer->handleMouseWheel (juce::MouseInputSource::InputSourceType::mouse,
-                                        peer->getComponent().getLocalPoint (root.getComponent(), pointFromParams (params, "x", "y")).toFloat(),
+                                        peer->getComponent().getLocalPoint (coordinateRoot, pointFromParams (params, "x", "y")).toFloat(),
                                         juce::Time::currentTimeMillis(),
                                         details);
             }
@@ -1030,13 +1078,15 @@ namespace melatonin
             if (!options.allowInput)
                 return error ("input_disabled", "Automation input is disabled for this session.");
 
-            if (root == nullptr)
-                return error ("no_root", "No root component is attached.");
+            auto* coordinateRoot = pointerCoordinateRoot (params);
+
+            if (coordinateRoot == nullptr)
+                return error ("window_not_found", "No automation window matched target: " + getString (params, "target", "root"));
 
             auto start = pointFromParams (params, "x", "y");
             auto end = pointFromParams (params, "toX", "toY");
 
-            if (auto* target = findComponentAt (*root, start))
+            if (auto* target = findComponentAt (*coordinateRoot, start))
             {
                 synthesizeDragOn (*target, start, end, getDragSteps (params));
                 return snapshotAfterAction();
@@ -1521,6 +1571,9 @@ namespace melatonin
             if (auto validationError = validateInputTarget (*targetComponent, params); !validationError.isVoid())
                 return validationError;
 
+            if (coordinateRootFor (*sourceComponent) != coordinateRootFor (*targetComponent))
+                return error ("unsupported_cross_window_drag", "drag_to requires source and target to be in the same automation window.");
+
             if (isTrial (params))
                 return object ({ { "source", actionabilityResult (*sourceComponent) },
                                  { "target", actionabilityResult (*targetComponent) } });
@@ -1683,7 +1736,7 @@ namespace melatonin
             refs.clear();
             ++generation;
 
-            auto tree = serializeComponent (*root, 0, 64);
+            auto tree = serializeAutomationTree (64);
             juce::Array<juce::var> matches;
             collectLocatorMatches (matches, tree, *locatorObject, defaultVisible);
 
@@ -2105,7 +2158,9 @@ namespace melatonin
 
         bool receivesEvents (juce::Component& target) const
         {
-            if (root == nullptr)
+            auto* coordinateRoot = coordinateRootFor (target);
+
+            if (coordinateRoot == nullptr)
                 return false;
 
             auto rootBounds = getRootBounds (target);
@@ -2113,7 +2168,7 @@ namespace melatonin
             if (rootBounds.isEmpty())
                 return false;
 
-            auto* found = findComponentAt (*root, rootBounds.getCentre());
+            auto* found = findComponentAt (*coordinateRoot, rootBounds.getCentre());
 
             return found == &target || (found != nullptr && target.isParentOf (found));
         }
@@ -2151,7 +2206,7 @@ namespace melatonin
 
         juce::Point<float> targetCentreLocal (juce::Component& target) const
         {
-            return target.getLocalPoint (root, getRootBounds (target).getCentre()).toFloat();
+            return target.getLocalBounds().getCentre().toFloat();
         }
 
         juce::var localClickPoint (juce::Component& target, juce::DynamicObject& params, juce::Point<float>& point) const
@@ -2246,10 +2301,12 @@ namespace melatonin
 
         void synthesizeDragOn (juce::Component& target, juce::Point<int> rootStart, juce::Point<int> rootEnd, int steps)
         {
-            if (root == nullptr)
+            auto* coordinateRoot = coordinateRootFor (target);
+
+            if (coordinateRoot == nullptr)
                 return;
 
-            auto start = target.getLocalPoint (root, rootStart).toFloat();
+            auto start = target.getLocalPoint (coordinateRoot, rootStart).toFloat();
             auto source = juce::Desktop::getInstance().getMainMouseSource();
             auto now = juce::Time::getCurrentTime();
             auto downModifiers = juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier);
@@ -2332,14 +2389,14 @@ namespace melatonin
             return component.getLocalBounds().contains (localPoint) ? &component : nullptr;
         }
 
-        void synthesizeClickAt (juce::Point<int> rootPoint)
+        void synthesizeClickAt (juce::Component& coordinateRoot, juce::Point<int> rootPoint)
         {
             if (root == nullptr)
                 return;
 
-            if (auto* peer = getRootPeer())
+            if (auto* peer = coordinateRoot.getPeer())
             {
-                auto peerPoint = peer->getComponent().getLocalPoint (root, rootPoint).toFloat();
+                auto peerPoint = peer->getComponent().getLocalPoint (&coordinateRoot, rootPoint).toFloat();
                 auto now = juce::Time::currentTimeMillis();
                 peer->handleMouseEvent (juce::MouseInputSource::InputSourceType::mouse, peerPoint, juce::ModifierKeys(), 0.0f, 0.0f, now);
                 peer->handleMouseEvent (juce::MouseInputSource::InputSourceType::mouse, peerPoint, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0.0f, now + 1);
@@ -2347,14 +2404,14 @@ namespace melatonin
             }
         }
 
-        void sendPeerMouseEvent (juce::Point<int> rootPoint, juce::ModifierKeys modifiers, float pressure)
+        void sendPeerMouseEvent (juce::Component& coordinateRoot, juce::Point<int> rootPoint, juce::ModifierKeys modifiers, float pressure)
         {
             if (root == nullptr)
                 return;
 
-            if (auto* peer = getRootPeer())
+            if (auto* peer = coordinateRoot.getPeer())
             {
-                auto peerPoint = peer->getComponent().getLocalPoint (root, rootPoint).toFloat();
+                auto peerPoint = peer->getComponent().getLocalPoint (&coordinateRoot, rootPoint).toFloat();
                 peer->handleMouseEvent (juce::MouseInputSource::InputSourceType::mouse,
                                         peerPoint,
                                         modifiers,
@@ -2369,18 +2426,119 @@ namespace melatonin
             return { getInt (params, xName, 0), getInt (params, yName, 0) };
         }
 
+        juce::Array<AutomationWindow> automationWindows() const
+        {
+            juce::Array<AutomationWindow> result;
+
+            auto* rootComponent = root.getComponent();
+
+            if (rootComponent == nullptr)
+                return result;
+
+            result.add ({ "root", rootComponent, true });
+
+            auto* rootTopLevel = rootComponent->getTopLevelComponent();
+            auto& desktop = juce::Desktop::getInstance();
+
+            for (int i = 0; i < desktop.getNumComponents(); ++i)
+            {
+                auto* component = desktop.getComponent (i);
+
+                if (component == nullptr
+                    || component == rootComponent
+                    || component == rootTopLevel
+                    || !component->isShowing()
+                    || isInspectorInternalComponent (*component))
+                {
+                    continue;
+                }
+
+                result.add ({ "window-" + juce::String (result.size()), component, false });
+            }
+
+            return result;
+        }
+
+        juce::Component* automationWindowForId (const juce::String& id) const
+        {
+            for (auto& window : automationWindows())
+                if (window.id == id)
+                    return window.component.getComponent();
+
+            return nullptr;
+        }
+
+        juce::Component* coordinateRootFor (juce::Component& component) const
+        {
+            auto* rootComponent = root.getComponent();
+
+            if (rootComponent == nullptr)
+                return nullptr;
+
+            if (&component == rootComponent || rootComponent->isParentOf (&component))
+                return rootComponent;
+
+            if (auto* topLevel = component.getTopLevelComponent())
+                return topLevel;
+
+            return &component;
+        }
+
+        juce::Component* pointerCoordinateRoot (juce::DynamicObject& params) const
+        {
+            auto target = getString (params, "target", "root");
+
+            if (target.isEmpty() || target == "root")
+                return root.getComponent();
+
+            return automationWindowForId (target);
+        }
+
         juce::Rectangle<int> getRootBounds (juce::Component& component) const
         {
-            if (root == nullptr)
+            auto* coordinateRoot = coordinateRootFor (component);
+
+            if (coordinateRoot == nullptr)
                 return {};
 
-            if (&component == root.getComponent())
-                return root->getLocalBounds();
+            if (&component == coordinateRoot)
+                return coordinateRoot->getLocalBounds();
 
             if (auto* parent = component.getParentComponent())
-                return root->getLocalArea (parent, component.getBounds());
+                return coordinateRoot->getLocalArea (parent, component.getBounds());
 
-            return {};
+            return component.getLocalBounds();
+        }
+
+        juce::var serializeAutomationTree (int maxDepth)
+        {
+            auto windows = automationWindows();
+
+            if (windows.size() <= 1)
+                return root != nullptr ? serializeComponent (*root, 0, maxDepth) : juce::var();
+
+            auto* node = new juce::DynamicObject();
+            juce::Array<juce::var> children;
+
+            node->setProperty ("name", "Automation Windows");
+            node->setProperty ("componentId", {});
+            node->setProperty ("componentName", "Automation Windows");
+            node->setProperty ("class", "melatonin::AutomationWindows");
+            node->setProperty ("enabled", true);
+            node->setProperty ("visible", true);
+            node->setProperty ("focused", false);
+            node->setProperty ("bounds", rectangleToVar ({ 0, 0, 0, 0 }));
+            node->setProperty ("screenBounds", rectangleToVar ({ 0, 0, 0, 0 }));
+
+            if (maxDepth > 0)
+            {
+                for (auto& window : windows)
+                    if (auto* component = window.component.getComponent())
+                        children.add (serializeComponent (*component, 1, maxDepth));
+            }
+
+            node->setProperty ("children", children);
+            return node;
         }
 
         juce::var serializeComponent (juce::Component& component, int depth, int maxDepth)

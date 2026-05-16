@@ -142,7 +142,7 @@ namespace
 
             auto traceStop = juce::JSON::parse (runCli ({ "-s", sessionName, "trace-stop" }));
             auto& traceStopObject = asObject (traceStop, "trace-stop");
-            require ((int) traceStopObject.getProperty ("events") >= 60, "DemoRunner trace did not record enough events");
+            require ((int) traceStopObject.getProperty ("events") >= 100, "DemoRunner trace did not record enough events");
             copyEvidenceFile (traceStopObject.getProperty ("trace").toString(), "demorunner-trace.json");
         }
 
@@ -300,6 +300,42 @@ namespace
             return parsed;
         }
 
+        juce::var readWindows()
+        {
+            auto parsed = juce::JSON::parse (runCli ({ "-s", sessionName, "windows" }));
+            asObject (parsed, "windows");
+            return parsed;
+        }
+
+        int windowCount()
+        {
+            auto windows = asObject (readWindows(), "windows").getProperty ("windows");
+            return windows.isArray() ? windows.getArray()->size() : 0;
+        }
+
+        juce::String secondaryWindowIdContaining (const juce::String& titleText)
+        {
+            auto windows = asObject (readWindows(), "windows").getProperty ("windows");
+            require (windows.isArray(), "windows did not return an array");
+
+            for (const auto& window : *windows.getArray())
+            {
+                auto* object = window.getDynamicObject();
+
+                if (object == nullptr)
+                    continue;
+
+                const auto id = object->getProperty ("id").toString();
+                const auto title = object->getProperty ("title").toString();
+
+                if (id != "root" && title.contains (titleText))
+                    return id;
+            }
+
+            fail ("Could not find secondary window containing title: " + titleText);
+            return {};
+        }
+
         juce::var readLocator (std::initializer_list<juce::String> locatorArgs)
         {
             auto args = makeArgs ({ "-s", sessionName, "locator", "--format", "json" });
@@ -308,6 +344,19 @@ namespace
             auto parsed = juce::JSON::parse (runCli (args));
             asObject (parsed, "locator");
             return parsed;
+        }
+
+        juce::var firstLocatorMatch (std::initializer_list<juce::String> locatorArgs, const juce::String& label)
+        {
+            auto locator = readLocator (locatorArgs);
+            auto matches = asObject (locator, label + " locator").getProperty ("matches");
+            require (matches.isArray() && !matches.getArray()->isEmpty(), label + " locator returned no matches");
+            return matches.getArray()->getReference (0);
+        }
+
+        int locatorCount (std::initializer_list<juce::String> locatorArgs, const juce::String& label)
+        {
+            return (int) asObject (readLocator (locatorArgs), label + " locator").getProperty ("count");
         }
 
         static juce::var findNode (const juce::var& node, const std::function<bool (juce::DynamicObject&)>& predicate)
@@ -350,6 +399,17 @@ namespace
             return nodeString (node, "ref");
         }
 
+        static juce::Rectangle<int> boundsOf (const juce::var& node)
+        {
+            auto bounds = asObject (node, "node").getProperty ("bounds");
+            auto& boundsObject = asObject (bounds, "bounds");
+
+            return { (int) boundsObject.getProperty ("x"),
+                     (int) boundsObject.getProperty ("y"),
+                     (int) boundsObject.getProperty ("w"),
+                     (int) boundsObject.getProperty ("h") };
+        }
+
         static bool isVisible (juce::DynamicObject& node)
         {
             return (bool) node.getProperty ("visible");
@@ -366,6 +426,13 @@ namespace
                 return isVisible (node)
                        && hasClass (node, className)
                        && node.getProperty ("name").toString() == name;
+            });
+        }
+
+        juce::var visibleNodeByClass (const juce::var& snapshot, const juce::String& className)
+        {
+            return findSnapshotNode (snapshot, className, [&] (juce::DynamicObject& node) {
+                return isVisible (node) && hasClass (node, className);
             });
         }
 
@@ -450,27 +517,43 @@ namespace
 
         struct DemoCase
         {
+            enum class Exercise
+            {
+                codeEditor,
+                componentGrid,
+                componentTransforms,
+                dialogs,
+                grid,
+                images,
+                fonts,
+                audioSettings,
+                gain,
+                valueTrees,
+                xmlAndJson,
+                openGL
+            };
+
             const char* category = nullptr;
             const char* file = nullptr;
             const char* screenshot = nullptr;
-            bool isOpenGL = false;
+            Exercise exercise = Exercise::codeEditor;
         };
 
         void exerciseAdditionalDemoCoverage()
         {
             const DemoCase demos[] {
-                { "GUI", "CodeEditorDemo.h",          "code-editor-demo.png", false },
-                { "GUI", "ComponentDemo.h",           "component-demo.png", false },
-                { "GUI", "ComponentTransformsDemo.h", "component-transforms-demo.png", false },
-                { "GUI", "DialogsDemo.h",             "dialogs-demo.png", false },
-                { "GUI", "GridDemo.h",                "grid-demo.png", false },
-                { "GUI", "ImagesDemo.h",              "images-demo.png", false },
-                { "GUI", "FontsDemo.h",               "fonts-demo.png", false },
-                { "Audio", "AudioSettingsDemo.h",     "audio-settings-demo.png", false },
-                { "DSP", "GainDemo.h",                "gain-demo.png", false },
-                { "Utilities", "ValueTreesDemo.h",    "value-trees-demo.png", false },
-                { "Utilities", "XMLandJSONDemo.h",    "xml-and-json-demo.png", false },
-                { "GUI", "OpenGLDemo.h",              "opengl-demo.png", true }
+                { "GUI", "CodeEditorDemo.h",          "code-editor-demo.png", DemoCase::Exercise::codeEditor },
+                { "GUI", "ComponentDemo.h",           "component-demo.png", DemoCase::Exercise::componentGrid },
+                { "GUI", "ComponentTransformsDemo.h", "component-transforms-demo.png", DemoCase::Exercise::componentTransforms },
+                { "GUI", "DialogsDemo.h",             "dialogs-demo.png", DemoCase::Exercise::dialogs },
+                { "GUI", "GridDemo.h",                "grid-demo.png", DemoCase::Exercise::grid },
+                { "GUI", "ImagesDemo.h",              "images-demo.png", DemoCase::Exercise::images },
+                { "GUI", "FontsDemo.h",               "fonts-demo.png", DemoCase::Exercise::fonts },
+                { "Audio", "AudioSettingsDemo.h",     "audio-settings-demo.png", DemoCase::Exercise::audioSettings },
+                { "DSP", "GainDemo.h",                "gain-demo.png", DemoCase::Exercise::gain },
+                { "Utilities", "ValueTreesDemo.h",    "value-trees-demo.png", DemoCase::Exercise::valueTrees },
+                { "Utilities", "XMLandJSONDemo.h",    "xml-and-json-demo.png", DemoCase::Exercise::xmlAndJson },
+                { "GUI", "OpenGLDemo.h",              "opengl-demo.png", DemoCase::Exercise::openGL }
             };
 
             for (const auto& demo : demos)
@@ -478,10 +561,236 @@ namespace
                 selectDemoFromCategory (demo.category, demo.file);
                 assertCodeTabLoads();
                 captureScreenshot (demo.screenshot);
-
-                if (demo.isOpenGL)
-                    exerciseOpenGLDemo();
+                exerciseDemo (demo);
             }
+        }
+
+        void exerciseDemo (const DemoCase& demo)
+        {
+            switch (demo.exercise)
+            {
+                case DemoCase::Exercise::codeEditor:           exerciseCodeEditorDemo(); break;
+                case DemoCase::Exercise::componentGrid:        exerciseComponentDemo(); break;
+                case DemoCase::Exercise::componentTransforms:  exerciseComponentTransformsDemo(); break;
+                case DemoCase::Exercise::dialogs:              exerciseDialogsDemo(); break;
+                case DemoCase::Exercise::grid:                 exerciseGridDemo(); break;
+                case DemoCase::Exercise::images:               exerciseImagesDemo(); break;
+                case DemoCase::Exercise::fonts:                exerciseFontsDemo(); break;
+                case DemoCase::Exercise::audioSettings:        exerciseAudioSettingsDemo(); break;
+                case DemoCase::Exercise::gain:                 exerciseGainDemo(); break;
+                case DemoCase::Exercise::valueTrees:           exerciseValueTreesDemo(); break;
+                case DemoCase::Exercise::xmlAndJson:           exerciseXmlAndJsonDemo(); break;
+                case DemoCase::Exercise::openGL:               exerciseOpenGLDemo(); break;
+            }
+        }
+
+        void exerciseCodeEditorDemo()
+        {
+            auto before = captureScreenshot ("code-editor-before-type.png");
+            runCli ({ "-s", sessionName, "click", "--role", "editableText", "--nth", "0", "--force", "--timeout-ms", "3000" });
+
+            for (int i = 0; i < 8; ++i)
+                runCli ({ "-s", sessionName, "press", "return", "--role", "editableText", "--nth", "0", "--force" });
+
+            auto after = captureScreenshot ("code-editor-after-type.png");
+            assertScreenshotsDiffer (before, after, "CodeEditor keyboard editing", 4);
+        }
+
+        void exerciseComponentDemo()
+        {
+            captureScreenshot ("component-before-grid-resize.png");
+            auto lightBounds = boundsOf (firstLocatorMatch ({ "--class", "ToggleLightComponent", "--nth", "0", "--visible" },
+                                                            "ComponentDemo light"));
+            runCli ({ "-s", sessionName, "mouse-move", "830", "580" });
+            runCli ({ "-s", sessionName, "mouse-move", juce::String (lightBounds.getCentreX()), juce::String (lightBounds.getCentreY()) });
+            runCli ({ "-s", sessionName, "wait", "--ms", "150" });
+
+            auto grid = firstLocatorMatch ({ "--class", "ToggleLightGridComponent", "--nth", "0", "--visible" },
+                                           "ComponentDemo light grid");
+            auto bounds = boundsOf (grid);
+            runCli ({ "-s", sessionName, "set-bounds", nodeRef (grid),
+                      "--x", juce::String (bounds.getX()),
+                      "--y", juce::String (bounds.getY()),
+                      "--w", juce::String (bounds.getWidth() - 120),
+                      "--h", juce::String (bounds.getHeight() - 80) });
+            runCli ({ "-s", sessionName, "wait", "--ms", "150" });
+            auto afterBounds = boundsOf (firstLocatorMatch ({ "--class", "ToggleLightGridComponent", "--nth", "0", "--visible" },
+                                                            "ComponentDemo resized light grid"));
+            require (afterBounds.getWidth() == bounds.getWidth() - 120 && afterBounds.getHeight() == bounds.getHeight() - 80,
+                     "ComponentDemo light-grid bounds did not update");
+            captureScreenshot ("component-after-grid-resize.png");
+        }
+
+        void exerciseComponentTransformsDemo()
+        {
+            auto before = captureScreenshot ("component-transforms-before-drag.png");
+            auto dragger = firstLocatorMatch ({ "--class", "CornerDragger", "--nth", "0", "--visible" },
+                                              "ComponentTransforms dragger");
+            auto beforeBounds = boundsOf (dragger);
+            runCli ({ "-s", sessionName, "drag", nodeRef (dragger), "--dx", "70", "--dy", "45", "--steps", "5" });
+            auto afterBounds = boundsOf (firstLocatorMatch ({ "--class", "CornerDragger", "--nth", "0", "--visible" },
+                                                           "ComponentTransforms moved dragger"));
+            require (afterBounds.getCentre().getDistanceFrom (beforeBounds.getCentre()) > 20.0f,
+                     "ComponentTransforms dragger did not move");
+            auto after = captureScreenshot ("component-transforms-after-drag.png");
+            assertScreenshotsDiffer (before, after, "ComponentTransforms drag");
+        }
+
+        void exerciseDialogsDemo()
+        {
+            runCli ({ "-s", sessionName, "uncheck", "--role", "toggleButton", "--name", "Use Native Windows", "--exact", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "wait-for-value", "--role", "toggleButton", "--name", "Use Native Windows", "--exact", "--value", "false", "--timeout-ms", "3000" });
+            captureScreenshot ("dialogs-before-alert-window.png");
+
+            const auto initialWindowCount = windowCount();
+            runCli ({ "-s", sessionName, "click", "--role", "button", "--name", "Alert Window With Extra Components", "--exact", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "wait-for-text", "AlertWindow demo..", "--timeout-ms", "3000" });
+            require (windowCount() > initialWindowCount, "Opening a non-native AlertWindow did not add an automation window");
+
+            auto dialogId = secondaryWindowIdContaining ("AlertWindow demo");
+            captureScreenshot ("dialogs-extra-components-window.png", { "--target", dialogId, "--source", "component" });
+
+            runCli ({ "-s", sessionName, "fill", "--class", "juce::TextEditor", "--value", "enter some text here", "--exact", "--visible", "Automation dialog input" });
+            runCli ({ "-s", sessionName, "wait-for-value", "--class", "juce::TextEditor", "--visible", "--value", "Automation dialog input", "--exact", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "select-option", "--class", "juce::ComboBox", "--value", "option 1", "--exact", "--visible", "--text", "option 3" });
+            runCli ({ "-s", sessionName, "wait-for-value", "--class", "juce::ComboBox", "--visible", "--value", "option 3", "--exact", "--timeout-ms", "3000" });
+            captureScreenshot ("dialogs-extra-components-filled.png", { "--target", dialogId, "--source", "component" });
+
+            runCli ({ "-s", sessionName, "click", "--role", "button", "--name", "OK", "--exact", "--visible", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "wait-for-text", "Automation dialog input", "--timeout-ms", "3000" });
+
+            dialogId = secondaryWindowIdContaining ("Alert Box");
+            captureScreenshot ("dialogs-result-window.png", { "--target", dialogId, "--source", "component" });
+            auto resultOk = firstLocatorMatch ({ "--role", "button", "--name", "OK", "--exact", "--visible" },
+                                               "Dialogs result OK button");
+            auto okBounds = boundsOf (resultOk);
+            runCli ({ "-s", sessionName, "click-xy", juce::String (okBounds.getCentreX()), juce::String (okBounds.getCentreY()), "--target", dialogId });
+            runCli ({ "-s", sessionName, "wait-for-locator", "--role", "button", "--name", "Alert Window With Extra Components", "--exact", "--visible", "--timeout-ms", "3000" });
+            require (windowCount() == initialWindowCount, "Dismissing non-native AlertWindows did not restore the original window count");
+        }
+
+        void exerciseGridDemo()
+        {
+            auto before = captureScreenshot ("grid-before-resize.png");
+            auto grid = firstLocatorMatch ({ "--class", "GridDemo", "--nth", "0", "--visible" },
+                                           "GridDemo root");
+            auto bounds = boundsOf (grid);
+            runCli ({ "-s", sessionName, "set-bounds", nodeRef (grid),
+                      "--x", juce::String (bounds.getX()),
+                      "--y", juce::String (bounds.getY()),
+                      "--w", juce::String (bounds.getWidth() - 180),
+                      "--h", juce::String (bounds.getHeight() - 140) });
+            runCli ({ "-s", sessionName, "wait", "--ms", "250" });
+            auto after = captureScreenshot ("grid-after-resize.png");
+            assertScreenshotsDiffer (before, after, "GridDemo responsive resize");
+        }
+
+        void exerciseImagesDemo()
+        {
+            auto before = captureScreenshot ("images-before-resize-bar-drag.png");
+            auto resizer = firstLocatorMatch ({ "--class", "StretchableLayoutResizerBar", "--nth", "0", "--visible" },
+                                              "ImagesDemo resizer");
+            runCli ({ "-s", sessionName, "drag", nodeRef (resizer), "--dx", "0", "--dy", "120", "--steps", "5" });
+            auto after = captureScreenshot ("images-after-resize-bar-drag.png");
+            assertScreenshotsDiffer (before, after, "ImagesDemo resizer drag");
+        }
+
+        void exerciseFontsDemo()
+        {
+            runCli ({ "-s", sessionName, "fill", "--role", "editableText", "--nth", "0", "Automation fonts demo" });
+            runCli ({ "-s", sessionName, "wait-for-value", "--role", "editableText", "--nth", "0", "--value", "Automation fonts demo", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "check", "--role", "toggleButton", "--name", "Bold", "--exact" });
+            runCli ({ "-s", sessionName, "wait-for-value", "--role", "toggleButton", "--name", "Bold", "--exact", "--value", "true", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "check", "--role", "toggleButton", "--name", "Italic", "--exact" });
+            runCli ({ "-s", sessionName, "set-value", "--role", "slider", "--nth", "0", "32" });
+            runCli ({ "-s", sessionName, "wait-for-value", "--role", "slider", "--nth", "0", "--value", "32", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "select-option", "--role", "comboBox", "--nth", "1", "--text", "Right" });
+            runCli ({ "-s", sessionName, "wait-for-value", "--role", "comboBox", "--nth", "1", "--value", "Right", "--timeout-ms", "3000" });
+            captureScreenshot ("fonts-after-controls.png");
+        }
+
+        void exerciseAudioSettingsDemo()
+        {
+            auto before = captureScreenshot ("audio-settings-before-toggle.png");
+
+            if (locatorCount ({ "--role", "toggleButton", "--name", "IAC Driver Bus 1", "--visible" }, "AudioSettings MIDI toggle buttons") > 0)
+            {
+                auto toggle = firstLocatorMatch ({ "--role", "toggleButton", "--name", "IAC Driver Bus 1", "--visible" },
+                                                 "AudioSettings MIDI toggle");
+                const auto wasChecked = (bool) asObject (toggle, "AudioSettings MIDI toggle").getProperty ("checked");
+
+                if (wasChecked)
+                    runCli ({ "-s", sessionName, "uncheck", "--role", "toggleButton", "--name", "IAC Driver Bus 1", "--visible", "--force", "--timeout-ms", "3000" });
+                else
+                    runCli ({ "-s", sessionName, "check", "--role", "toggleButton", "--name", "IAC Driver Bus 1", "--visible", "--force", "--timeout-ms", "3000" });
+
+                auto updated = firstLocatorMatch ({ "--role", "toggleButton", "--name", "IAC Driver Bus 1", "--visible" },
+                                                  "AudioSettings MIDI toggle after click");
+                const auto isChecked = (bool) asObject (updated, "AudioSettings MIDI toggle after click").getProperty ("checked");
+                require (isChecked != wasChecked, "AudioSettings MIDI toggle did not change state");
+
+                auto after = captureScreenshot ("audio-settings-after-toggle.png");
+                assertScreenshotsDiffer (before, after, "AudioSettings MIDI toggle", 3);
+
+                if (wasChecked)
+                    runCli ({ "-s", sessionName, "check", "--role", "toggleButton", "--name", "IAC Driver Bus 1", "--visible", "--force", "--timeout-ms", "3000" });
+                else
+                    runCli ({ "-s", sessionName, "uncheck", "--role", "toggleButton", "--name", "IAC Driver Bus 1", "--visible", "--force", "--timeout-ms", "3000" });
+            }
+            else
+            {
+                auto diagnostics = firstLocatorMatch ({ "--class", "juce::TextEditor", "--nth", "0", "--visible" },
+                                                      "AudioSettings diagnostics editor");
+                auto bounds = boundsOf (diagnostics);
+                runCli ({ "-s", sessionName, "click-xy", juce::String (bounds.getCentreX()), juce::String (bounds.getCentreY()) });
+                captureScreenshot ("audio-settings-after-diagnostics-click.png");
+            }
+        }
+
+        void exerciseGainDemo()
+        {
+            runCli ({ "-s", sessionName, "set-value", "--role", "slider", "--nth", "0", "6" });
+            runCli ({ "-s", sessionName, "wait-for-value", "--role", "slider", "--nth", "0", "--value", "6", "--timeout-ms", "3000" });
+            auto before = captureScreenshot ("gain-before-slider-drag.png");
+            auto slider = firstLocatorMatch ({ "--role", "slider", "--nth", "0", "--visible" },
+                                             "GainDemo slider");
+            runCli ({ "-s", sessionName, "drag", nodeRef (slider), "--dx", "-120", "--dy", "0", "--steps", "5" });
+            auto after = captureScreenshot ("gain-after-slider-drag.png");
+            assertScreenshotsDiffer (before, after, "GainDemo slider drag");
+        }
+
+        void exerciseValueTreesDemo()
+        {
+            auto before = captureScreenshot ("value-trees-before-scroll.png");
+            auto beforeCount = locatorCount ({ "--role", "treeItem", "--visible" }, "ValueTrees tree items");
+            require (beforeCount > 4, "ValueTrees demo did not expose enough tree items");
+
+            auto scrollBar = firstLocatorMatch ({ "--class", "juce::ScrollBar", "--nth", "0", "--visible" },
+                                                "ValueTrees scrollbar");
+            auto scrollBounds = boundsOf (scrollBar);
+            runCli ({ "-s", sessionName, "drag-xy",
+                      juce::String (scrollBounds.getCentreX()),
+                      juce::String (scrollBounds.getY() + 24),
+                      juce::String (scrollBounds.getCentreX()),
+                      juce::String (scrollBounds.getBottom() - 24),
+                      "--steps", "8" });
+            runCli ({ "-s", sessionName, "wait", "--ms", "250" });
+            auto afterScroll = captureScreenshot ("value-trees-after-scroll.png");
+            assertScreenshotsDiffer (before, afterScroll, "ValueTrees tree scroll", 4);
+            runCli ({ "-s", sessionName, "click", "--role", "button", "--name", "Undo", "--exact", "--timeout-ms", "3000" });
+            captureScreenshot ("value-trees-after-undo-click.png");
+        }
+
+        void exerciseXmlAndJsonDemo()
+        {
+            runCli ({ "-s", sessionName, "wait-for-value", "--role", "comboBox", "--nth", "0", "--value", "XML", "--timeout-ms", "3000" });
+            auto before = captureScreenshot ("xml-json-before-type-select.png");
+            runCli ({ "-s", sessionName, "select-option", "--role", "comboBox", "--nth", "0", "--text", "JSON" });
+            runCli ({ "-s", sessionName, "wait-for-value", "--role", "comboBox", "--nth", "0", "--value", "JSON", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "click", "--role", "editableText", "--nth", "0", "--force", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "press", "backspace", "--role", "editableText", "--nth", "0", "--force" });
+            auto after = captureScreenshot ("xml-json-after-json-edit.png");
+            assertScreenshotsDiffer (before, after, "XML/JSON select and edit");
         }
 
         void exerciseOpenGLDemo()
@@ -506,7 +815,7 @@ namespace
 
         void exerciseAccessibilityDemo()
         {
-            auto snapshot = readSnapshot();
+            auto snapshot = readSnapshot (8);
             auto demoTabs = visibleNodeByClassAndName (snapshot, "juce::TabbedComponent", "Demo tabs");
             auto tabNames = asObject (demoTabs, "Demo tabs").getProperty ("tabNames");
             require (tabNames.isArray() && tabNames.getArray()->size() >= 2, "Accessibility demo tabs did not expose tab names");
@@ -519,7 +828,7 @@ namespace
             runCli ({ "-s", sessionName, "set-value", "--role", "slider", "--nth", "0", "42" });
             runCli ({ "-s", sessionName, "wait-for-value", "--role", "slider", "--nth", "0", "--value", "42", "--timeout-ms", "3000" });
 
-            demoTabs = visibleNodeByClassAndName (readSnapshot(), "juce::TabbedComponent", "Demo tabs");
+            demoTabs = visibleNodeByClassAndName (readSnapshot (8), "juce::TabbedComponent", "Demo tabs");
             runCli ({ "-s", sessionName, "select-tab", nodeRef (demoTabs), "--name", "Custom Widget" });
             runCli ({ "-s", sessionName, "wait-for-text", "Description", "--timeout-ms", "3000" });
             captureScreenshot ("accessibility-custom-widget.png");
@@ -558,7 +867,7 @@ namespace
         juce::File captureScreenshot (const juce::String& name, std::initializer_list<juce::String> screenshotArgs = {})
         {
             runCli ({ "-s", sessionName, "wait", "--ms", "250" });
-            auto args = makeArgs ({ "-s", sessionName, "screenshot", "--target", "root", "--file", name, "--no-base64" });
+            auto args = makeArgs ({ "-s", sessionName, "screenshot", "--file", name, "--no-base64" });
             args.addArray (makeArgs (screenshotArgs));
 
             auto outputPath = runCli (args);
@@ -611,6 +920,41 @@ namespace
             require ((int) colours.size() >= minimumUniqueColours && luminanceRange >= minimumLuminanceRange,
                      label + " looks blank or too flat: uniqueColours=" + juce::String ((int) colours.size())
                          + " luminanceRange=" + juce::String (luminanceRange));
+        }
+
+        void assertScreenshotsDiffer (const juce::File& before,
+                                      const juce::File& after,
+                                      const juce::String& label,
+                                      int minimumDifferentSamples = 12)
+        {
+            auto beforeImage = juce::ImageFileFormat::loadFrom (before);
+            auto afterImage = juce::ImageFileFormat::loadFrom (after);
+
+            require (!beforeImage.isNull(), label + " before image could not be decoded: " + before.getFullPathName());
+            require (!afterImage.isNull(), label + " after image could not be decoded: " + after.getFullPathName());
+
+            if (beforeImage.getBounds() != afterImage.getBounds())
+                return;
+
+            auto differentSamples = 0;
+            const auto stepX = juce::jmax (1, beforeImage.getWidth() / 160);
+            const auto stepY = juce::jmax (1, beforeImage.getHeight() / 120);
+
+            for (int y = 0; y < beforeImage.getHeight(); y += stepY)
+            {
+                for (int x = 0; x < beforeImage.getWidth(); x += stepX)
+                {
+                    if (beforeImage.getPixelAt (x, y) != afterImage.getPixelAt (x, y))
+                    {
+                        ++differentSamples;
+
+                        if (differentSamples >= minimumDifferentSamples)
+                            return;
+                    }
+                }
+            }
+
+            require (false, label + " did not visibly change enough: differentSamples=" + juce::String (differentSamples));
         }
 
         void copyEvidenceFile (const juce::String& sourcePath, const juce::String& evidenceName)

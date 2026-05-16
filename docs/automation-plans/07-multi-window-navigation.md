@@ -49,14 +49,18 @@ Window target:
 Snapshots and screenshots should accept `window` targets in addition to root,
 ref, and locator.
 
+Coordinate input should also accept a window target so `click_xy`, mouse
+move/down/up, wheel, and point-to-point drag can operate inside secondary
+windows using that window's local coordinate space.
+
 ## CLI Changes
 
 Add:
 
 ```sh
 melatonin-ui -s app windows
-melatonin-ui -s app snapshot --window 0
-melatonin-ui -s app screenshot --window 0 --file /tmp/window.png
+melatonin-ui -s app screenshot --target window-1 --file /tmp/window.png
+melatonin-ui -s app click-xy 200 180 --target window-1
 melatonin-ui -s app activate-window --title DemoRunner
 melatonin-ui -s app dismiss-dialog --button OK
 ```
@@ -76,7 +80,7 @@ Add tools:
 - `juce_activate_window`
 - `juce_dismiss_dialog`
 
-Extend snapshot/screenshot/action tools to accept a window target.
+Extend screenshot and coordinate action tools to accept a window target.
 
 ## Internal C++ Endpoint Changes
 
@@ -118,7 +122,9 @@ Add:
 - Select a deterministic demo.
 - Switch between Demo, Code, and Settings tabs.
 - Return to home.
-- Open and dismiss a deterministic dialog from WindowsDemo if stable under CI.
+- Open DialogsDemo's non-native `AlertWindow`, interact with its text editor
+  and combo box, capture component screenshots, and dismiss the follow-up
+  result dialog using window-local `click-xy`.
 
 ## Test Matrix
 
@@ -137,11 +143,14 @@ C++ fixture self-test:
 CLI coverage:
 
 - `windows`, `activate-window`, `dismiss-dialog`.
+- `screenshot --target window-N`.
+- `click-xy --target window-N`.
 
 MCP coverage:
 
 - `juce_windows` returns metadata.
 - action can target a modal/window.
+- coordinate actions can target a modal/window.
 
 ## Failure Modes
 
