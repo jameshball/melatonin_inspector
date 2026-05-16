@@ -51,6 +51,15 @@ right-click. Public protocol methods:
 - `drag_to`
 - `drag_points`
 
+Current increment:
+
+- `mouse_move` already exists and is exposed through CLI/MCP.
+- Add `steps` to `drag`, `drag_xy`, and `drag_to` so tests can verify
+  multi-event drag paths instead of a single start/end jump.
+- Add `drag_to` with source `ref`/`locator` and target `targetRef`/
+  `targetLocator`. The initial implementation drags from source center to target
+  center, matching the common `locator.dragTo(target)` case.
+
 CLI may expose `dblclick` and `right-click` aliases for ergonomics, but they
 should serialize to `click` with `clickCount` or `button`.
 
@@ -77,6 +86,16 @@ melatonin-ui -s app drag-to --component-name source --target-component-name targ
 melatonin-ui -s app drag-points --from 20,20 --to 200,100 --steps 8
 ```
 
+In this repo's current CLI naming, use:
+
+```sh
+melatonin-ui -s app mouse-move 100 120
+melatonin-ui -s app drag <ref> --dx 40 --dy 15 --steps 4
+melatonin-ui -s app drag-xy 20 20 200 100 --steps 8
+melatonin-ui -s app drag-to <source-ref> <target-ref> --steps 6
+melatonin-ui -s app drag-to --component-name source --target-component-name target --steps 6
+```
+
 ## MCP Changes
 
 Add tools:
@@ -88,6 +107,10 @@ Add tools:
 
 `juce_mouse` and `juce_keyboard` are low-level escape hatches. Prefer semantic
 tools in descriptions so LLMs do not default to coordinates.
+
+This increment exposes `juce_drag_to` directly and adds optional `steps` to the
+existing drag tools. A future protocol consolidation can still group lower-level
+mouse/keyboard operations, but this should not block native coverage now.
 
 ## Internal C++ Endpoint Changes
 

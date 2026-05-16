@@ -396,6 +396,7 @@ namespace melatonin
                    || method == "mouse_up"
                    || method == "wheel"
                    || method == "drag_xy"
+                   || method == "drag_to"
                    || method == "type"
                    || method == "fill"
                    || method == "clear"
@@ -487,6 +488,9 @@ namespace melatonin
 
             if (method == "drag_xy")
                 return dragXY (params);
+
+            if (method == "drag_to")
+                return dragTo (params);
 
             if (method == "type")
                 return typeText (params);
@@ -941,7 +945,7 @@ namespace melatonin
 
             if (auto* target = findComponentAt (*root, start))
             {
-                synthesizeDragOn (*target, start, end);
+                synthesizeDragOn (*target, start, end, getDragSteps (params));
                 return snapshotAfterAction();
             }
 
@@ -1380,7 +1384,58 @@ namespace melatonin
             auto start = getRootBounds (*target).getCentre();
             auto end = start.translated (getInt (params, "dx", 0), getInt (params, "dy", 0));
 
-            synthesizeDragOn (*target, start, end);
+            synthesizeDragOn (*target, start, end, getDragSteps (params));
+
+            return snapshotAfterAction();
+        }
+
+        juce::var dragTo (juce::DynamicObject& params)
+        {
+            if (!options.allowInput)
+                return error ("input_disabled", "Automation input is disabled for this session.");
+
+            auto source = resolveTarget (params, true, true);
+
+            if (!source.error.isVoid())
+                return source.error;
+
+            auto* sourceComponent = source.component;
+
+            if (auto validationError = validateInputTarget (*sourceComponent, params); !validationError.isVoid())
+                return validationError;
+
+            juce::DynamicObject targetParams;
+            const auto targetRef = getString (params, "targetRef", {});
+            auto targetLocator = params.getProperty ("targetLocator");
+
+            if (targetRef.isEmpty() && !targetLocator.isObject())
+                return error ("invalid_locator", "drag_to requires targetRef or targetLocator.");
+
+            if (targetRef.isNotEmpty())
+                targetParams.setProperty ("ref", targetRef);
+
+            if (targetLocator.isObject())
+                targetParams.setProperty ("locator", targetLocator);
+
+            targetParams.setProperty ("force", params.getProperty ("force"));
+            auto target = resolveTarget (targetParams, true, true);
+
+            if (!target.error.isVoid())
+                return target.error;
+
+            auto* targetComponent = target.component;
+
+            if (auto validationError = validateInputTarget (*targetComponent, params); !validationError.isVoid())
+                return validationError;
+
+            if (isTrial (params))
+                return object ({ { "source", actionabilityResult (*sourceComponent) },
+                                 { "target", actionabilityResult (*targetComponent) } });
+
+            synthesizeDragOn (*sourceComponent,
+                              getRootBounds (*sourceComponent).getCentre(),
+                              getRootBounds (*targetComponent).getCentre(),
+                              getDragSteps (params));
 
             return snapshotAfterAction();
         }
@@ -1944,13 +1999,17 @@ namespace melatonin
             }
         }
 
-        void synthesizeDragOn (juce::Component& target, juce::Point<int> rootStart, juce::Point<int> rootEnd)
+        static int getDragSteps (juce::DynamicObject& params)
+        {
+            return juce::jlimit (1, 100, getInt (params, "steps", 1));
+        }
+
+        void synthesizeDragOn (juce::Component& target, juce::Point<int> rootStart, juce::Point<int> rootEnd, int steps)
         {
             if (root == nullptr)
                 return;
 
             auto start = target.getLocalPoint (root, rootStart).toFloat();
-            auto end = target.getLocalPoint (root, rootEnd).toFloat();
             auto source = juce::Desktop::getInstance().getMainMouseSource();
             auto now = juce::Time::getCurrentTime();
             auto downModifiers = juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier);
@@ -1971,21 +2030,31 @@ namespace melatonin
                                 1,
                                 false });
 
-            target.mouseDrag ({ source,
-                                end,
-                                downModifiers,
-                                1.0f,
-                                0.0f,
-                                0.0f,
-                                0.0f,
-                                0.0f,
-                                &target,
-                                &target,
-                                now + juce::RelativeTime::milliseconds (16),
-                                start,
-                                now,
-                                1,
-                                true });
+            juce::Point<float> end;
+
+            for (int i = 1; i <= steps; ++i)
+            {
+                end = {
+                    start.x + (float) (rootEnd.x - rootStart.x) * (float) i / (float) steps,
+                    start.y + (float) (rootEnd.y - rootStart.y) * (float) i / (float) steps
+                };
+
+                target.mouseDrag ({ source,
+                                    end,
+                                    downModifiers,
+                                    1.0f,
+                                    0.0f,
+                                    0.0f,
+                                    0.0f,
+                                    0.0f,
+                                    &target,
+                                    &target,
+                                    now + juce::RelativeTime::milliseconds (16 * i),
+                                    start,
+                                    now,
+                                    1,
+                                    true });
+            }
 
             target.mouseUp ({ source,
                               end,
@@ -1997,7 +2066,7 @@ namespace melatonin
                               0.0f,
                               &target,
                               &target,
-                              now + juce::RelativeTime::milliseconds (17),
+                              now + juce::RelativeTime::milliseconds (16 * steps + 1),
                               start,
                               now,
                               1,

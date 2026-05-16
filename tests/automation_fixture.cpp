@@ -554,12 +554,12 @@ namespace
 
             auto dragBoxBefore = findByComponentName (snapshot, "advanced.dragBox");
             auto dragBoxBeforeBounds = boundsOf (dragBoxBefore);
-            dragRef (asObject (dragBoxBefore, "advanced.dragBox").getProperty ("ref").toString(), 40, 15);
+            dragRef (asObject (dragBoxBefore, "advanced.dragBox").getProperty ("ref").toString(), 40, 15, 4);
             snapshot = readSnapshot();
             auto dragBoxAfterBounds = boundsOf (findByComponentName (snapshot, "advanced.dragBox"));
             require (dragBoxAfterBounds.getX() == dragBoxBeforeBounds.getX() + 40, "drag did not move Drag Box on the x axis");
             require (dragBoxAfterBounds.getY() == dragBoxBeforeBounds.getY() + 15, "drag did not move Drag Box on the y axis");
-            assertStatus (snapshot, "Status: DragBox");
+            assertStatus (snapshot, "steps=4");
 
             runCli ({ "-s", sessionName, "hover", juce::String (dragBoxAfterBounds.getCentreX()), juce::String (dragBoxAfterBounds.getCentreY()) });
             runCli ({ "-s", sessionName, "mouse-down", juce::String (dragBoxAfterBounds.getCentreX()), juce::String (dragBoxAfterBounds.getCentreY()) });
@@ -571,11 +571,53 @@ namespace
                       juce::String (dragBoxAfterBounds.getCentreX()),
                       juce::String (dragBoxAfterBounds.getCentreY()),
                       juce::String (dragBoxAfterBounds.getCentreX() + 20),
-                      juce::String (dragBoxAfterBounds.getCentreY() + 10) });
+                      juce::String (dragBoxAfterBounds.getCentreY() + 10),
+                      "--steps",
+                      "3" });
             snapshot = readSnapshot();
             auto dragBoxPointDragBounds = boundsOf (findByComponentName (snapshot, "advanced.dragBox"));
             require (dragBoxPointDragBounds.getX() == dragBoxAfterBounds.getX() + 20, "drag-xy did not move Drag Box on the x axis");
             require (dragBoxPointDragBounds.getY() == dragBoxAfterBounds.getY() + 10, "drag-xy did not move Drag Box on the y axis");
+            assertStatus (snapshot, "steps=3");
+
+            auto inputProbeBounds = boundsOf (findByComponentName (snapshot, "advanced.inputProbe"));
+            auto expectedDragToBounds = dragBoxPointDragBounds.translated (inputProbeBounds.getCentreX() - dragBoxPointDragBounds.getCentreX(),
+                                                                          inputProbeBounds.getCentreY() - dragBoxPointDragBounds.getCentreY());
+            runCli ({ "-s",
+                      sessionName,
+                      "drag-to",
+                      "--component-name",
+                      "advanced.dragBox",
+                      "--target-component-name",
+                      "advanced.inputProbe",
+                      "--steps",
+                      "5" });
+            snapshot = readSnapshot();
+            auto dragBoxAfterDragToBounds = boundsOf (findByComponentName (snapshot, "advanced.dragBox"));
+            require (dragBoxAfterDragToBounds.getX() == expectedDragToBounds.getX(), "drag-to did not move Drag Box to target x");
+            require (dragBoxAfterDragToBounds.getY() == expectedDragToBounds.getY(), "drag-to did not move Drag Box to target y");
+            assertStatus (snapshot, "steps=5");
+            runCli ({ "-s", sessionName, "set-bounds", refByComponentName (snapshot, "advanced.dragBox"), "--x", "240", "--y", "100", "--w", "100", "--h", "42" });
+            snapshot = readSnapshot();
+            dragBoxAfterDragToBounds = boundsOf (findByComponentName (snapshot, "advanced.dragBox"));
+
+            auto resetBoundsBeforeMcpDrag = boundsOf (findByComponentName (snapshot, "advanced.reset"));
+            auto expectedMcpDragToBounds = dragBoxAfterDragToBounds.translated (resetBoundsBeforeMcpDrag.getCentreX() - dragBoxAfterDragToBounds.getCentreX(),
+                                                                               resetBoundsBeforeMcpDrag.getCentreY() - dragBoxAfterDragToBounds.getCentreY());
+            auto dragToOutput = runMcpBatch ({
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}})",
+                R"({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"juce_drag_to","arguments":{"session":"automation_fixture","locator":{"componentName":"advanced.dragBox"},"targetLocator":{"componentName":"advanced.reset"},"steps":2}}})"
+            });
+            auto dragToLines = juce::StringArray::fromLines (dragToOutput);
+            require (dragToLines.size() >= 2, "MCP drag_to expected at least 2 response lines, got " + juce::String (dragToLines.size()) + "\n" + dragToOutput);
+            assertMcpResult (parseMcpLine (dragToLines, 1), 2);
+            snapshot = readSnapshot();
+            auto dragBoxAfterMcpDragToBounds = boundsOf (findByComponentName (snapshot, "advanced.dragBox"));
+            require (dragBoxAfterMcpDragToBounds.getX() == expectedMcpDragToBounds.getX(), "MCP drag_to did not move Drag Box to target x");
+            require (dragBoxAfterMcpDragToBounds.getY() == expectedMcpDragToBounds.getY(), "MCP drag_to did not move Drag Box to target y");
+            assertStatus (snapshot, "steps=2");
+            runCli ({ "-s", sessionName, "set-bounds", refByComponentName (snapshot, "advanced.dragBox"), "--x", "240", "--y", "100", "--w", "100", "--h", "42" });
+            snapshot = readSnapshot();
 
             runCli ({ "-s", sessionName, "dblclick", "--component-id", "advanced.inputProbe" });
             snapshot = readSnapshot();
@@ -764,6 +806,7 @@ namespace
             bool foundKeyUpTool = false;
             bool foundClearTool = false;
             bool foundSetCheckedTool = false;
+            bool foundDragToTool = false;
 
             for (const auto& toolInfo : *tools.getArray())
             {
@@ -793,6 +836,9 @@ namespace
 
                 if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_set_checked")
                     foundSetCheckedTool = true;
+
+                if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_drag_to")
+                    foundDragToTool = true;
             }
 
             require (foundSnapshotTool, "MCP tools/list did not expose juce_snapshot");
@@ -804,6 +850,7 @@ namespace
             require (foundKeyUpTool, "MCP tools/list did not expose juce_key_up");
             require (foundClearTool, "MCP tools/list did not expose juce_clear");
             require (foundSetCheckedTool, "MCP tools/list did not expose juce_set_checked");
+            require (foundDragToTool, "MCP tools/list did not expose juce_drag_to");
 
             auto capabilitiesCallResult = assertMcpResult (parseMcpLine (lines, 2), 3);
             auto& capabilitiesCall = asObject (capabilitiesCallResult, "MCP capabilities result");
@@ -888,9 +935,9 @@ namespace
             runCli ({ "-s", sessionName, "press", key, "--ref", ref });
         }
 
-        void dragRef (const juce::String& ref, int dx, int dy)
+        void dragRef (const juce::String& ref, int dx, int dy, int steps = 1)
         {
-            runCli ({ "-s", sessionName, "drag", ref, "--dx", juce::String (dx), "--dy", juce::String (dy) });
+            runCli ({ "-s", sessionName, "drag", ref, "--dx", juce::String (dx), "--dy", juce::String (dy), "--steps", juce::String (steps) });
         }
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AutomationFixtureSelfTest)
@@ -1054,20 +1101,23 @@ namespace
         void mouseDown (const juce::MouseEvent&) override
         {
             dragStartBounds = getBounds();
+            dragEvents = 0;
         }
 
         void mouseDrag (const juce::MouseEvent& event) override
         {
+            ++dragEvents;
             setBounds (dragStartBounds.translated (event.getDistanceFromDragStartX(), event.getDistanceFromDragStartY()));
 
             if (onDragged)
-                onDragged (getBounds());
+                onDragged (getBounds(), dragEvents);
         }
 
-        std::function<void (juce::Rectangle<int>)> onDragged;
+        std::function<void (juce::Rectangle<int>, int)> onDragged;
 
     private:
         juce::Rectangle<int> dragStartBounds;
+        int dragEvents = 0;
     };
 
     class InputProbe : public juce::Component
@@ -1312,8 +1362,8 @@ namespace
                 setStatus ("Status: Nested " + name);
             };
 
-            advanced.dragBox.onDragged = [this] (juce::Rectangle<int> bounds) {
-                setStatus ("Status: DragBox " + juce::String (bounds.getX()) + "," + juce::String (bounds.getY()));
+            advanced.dragBox.onDragged = [this] (juce::Rectangle<int> bounds, int dragEvents) {
+                setStatus ("Status: DragBox " + juce::String (bounds.getX()) + "," + juce::String (bounds.getY()) + " steps=" + juce::String (dragEvents));
             };
 
             advanced.inputProbe.onDoubleClick = [this] {

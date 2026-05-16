@@ -262,6 +262,48 @@ namespace
         return hasLocator ? juce::var (locator) : juce::var();
     }
 
+    juce::var parseTargetLocatorOptions (juce::StringArray& args)
+    {
+        auto* locator = new juce::DynamicObject();
+        bool hasLocator = false;
+
+        auto addString = [&] (const juce::String& flag, const juce::String& property)
+        {
+            auto value = optionValue (args, flag);
+
+            if (value.isNotEmpty())
+            {
+                locator->setProperty (property, value);
+                hasLocator = true;
+            }
+        };
+
+        addString ("--target-role", "role");
+        addString ("--target-name", "name");
+        addString ("--target-text", "text");
+        addString ("--target-component-id", "componentId");
+        addString ("--target-component-name", "componentName");
+        addString ("--target-test-id", "testId");
+        addString ("--target-class", "class");
+        addString ("--target-value", "value");
+
+        auto nth = optionValue (args, "--target-nth");
+
+        if (nth.isNotEmpty())
+        {
+            locator->setProperty ("nth", nth.getIntValue());
+            hasLocator = true;
+        }
+
+        if (hasFlag (args, "--target-exact"))
+        {
+            locator->setProperty ("exact", true);
+            hasLocator = true;
+        }
+
+        return hasLocator ? juce::var (locator) : juce::var();
+    }
+
     void addLocatorIfPresent (juce::DynamicObject& params, const juce::var& locator)
     {
         if (!locator.isVoid())
@@ -427,7 +469,7 @@ namespace
                   toolSchema ({ { "session", stringSchema() }, { "x", numberSchema() }, { "y", numberSchema() }, { "deltaX", numberSchema() }, { "deltaY", numberSchema() } }, { "x", "y" })),
             tool ("juce_drag_xy",
                   "Drag from one root-local point to another.",
-                  toolSchema ({ { "session", stringSchema() }, { "x", numberSchema() }, { "y", numberSchema() }, { "toX", numberSchema() }, { "toY", numberSchema() } }, { "x", "y", "toX", "toY" })),
+                  toolSchema ({ { "session", stringSchema() }, { "x", numberSchema() }, { "y", numberSchema() }, { "toX", numberSchema() }, { "toY", numberSchema() }, { "steps", numberSchema() } }, { "x", "y", "toX", "toY" })),
             tool ("juce_type",
                   "Type text into a component ref and return a fresh snapshot.",
                   toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "text", stringSchema() } }, { "text" })),
@@ -466,7 +508,15 @@ namespace
                   toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "name", stringSchema() }, { "index", numberSchema() } })),
             tool ("juce_drag",
                   "Drag a component by a delta and return a fresh snapshot.",
-                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "dx", numberSchema() }, { "dy", numberSchema() } })),
+                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "dx", numberSchema() }, { "dy", numberSchema() }, { "steps", numberSchema() } })),
+            tool ("juce_drag_to",
+                  "Drag a source component to a target component center.",
+                  toolSchema ({ { "session", stringSchema() },
+                                { "ref", stringSchema() },
+                                { "locator", locatorSchema() },
+                                { "targetRef", stringSchema() },
+                                { "targetLocator", locatorSchema() },
+                                { "steps", numberSchema() } })),
             tool ("juce_set_bounds",
                   "Set a component's bounds and return a fresh snapshot.",
                   toolSchema ({ { "session", stringSchema() },
@@ -530,6 +580,7 @@ namespace
         if (name == "juce_select_option") return "select_option";
         if (name == "juce_select_tab") return "select_tab";
         if (name == "juce_drag") return "drag";
+        if (name == "juce_drag_to") return "drag_to";
         if (name == "juce_set_bounds") return "set_bounds";
         if (name == "juce_set_property") return "set_property";
         if (name == "juce_wait") return "wait";
@@ -759,10 +810,11 @@ namespace
             << "  melatonin-ui -s <session> right-click <ref>\n"
             << "  melatonin-ui -s <session> click-xy <x> <y>\n"
             << "  melatonin-ui -s <session> hover <x> <y>\n"
+            << "  melatonin-ui -s <session> mouse-move <x> <y>\n"
             << "  melatonin-ui -s <session> mouse-down <x> <y>\n"
             << "  melatonin-ui -s <session> mouse-up <x> <y>\n"
             << "  melatonin-ui -s <session> wheel <x> <y> --dy amount\n"
-            << "  melatonin-ui -s <session> drag-xy <x> <y> <toX> <toY>\n"
+            << "  melatonin-ui -s <session> drag-xy <x> <y> <toX> <toY> [--steps n]\n"
             << "  melatonin-ui -s <session> type <ref> <text>\n"
             << "  melatonin-ui -s <session> fill <ref> <text>\n"
             << "  melatonin-ui -s <session> clear <ref>\n"
@@ -775,7 +827,8 @@ namespace
             << "  melatonin-ui -s <session> press <key> [--ref m1]\n"
             << "  melatonin-ui -s <session> key-down <key> [--ref m1]\n"
             << "  melatonin-ui -s <session> key-up <key> [--ref m1]\n"
-            << "  melatonin-ui -s <session> drag <ref> --dx n --dy n\n"
+            << "  melatonin-ui -s <session> drag <ref> --dx n --dy n [--steps n]\n"
+            << "  melatonin-ui -s <session> drag-to <ref> <target-ref> [--steps n]\n"
             << "  melatonin-ui -s <session> set-bounds <ref> --x n --y n --w n --h n\n"
             << "  melatonin-ui -s <session> set-property <ref> <name> <value>\n"
             << "  melatonin-ui -s <session> wait --ms n\n"
@@ -962,10 +1015,16 @@ int main (int argc, char* argv[])
 
         if (command == "drag-xy" && args.size() >= 4)
         {
-            printResult (request (*sessionObject, "drag_xy", object ({ { "x", args[0].getIntValue() },
-                                                                       { "y", args[1].getIntValue() },
-                                                                       { "toX", args[2].getIntValue() },
-                                                                       { "toY", args[3].getIntValue() } })));
+            auto steps = optionValue (args, "--steps");
+            auto params = object ({ { "x", args[0].getIntValue() },
+                                    { "y", args[1].getIntValue() },
+                                    { "toX", args[2].getIntValue() },
+                                    { "toY", args[3].getIntValue() } });
+
+            if (steps.isNotEmpty())
+                params.getDynamicObject()->setProperty ("steps", steps.getIntValue());
+
+            printResult (request (*sessionObject, "drag_xy", params));
             return 0;
         }
 
@@ -1107,14 +1166,49 @@ int main (int argc, char* argv[])
             return 0;
         }
 
+        if (command == "drag-to")
+        {
+            auto steps = optionValue (args, "--steps");
+            auto targetRef = optionValue (args, "--target-ref");
+            auto targetLocator = parseTargetLocatorOptions (args);
+            juce::DynamicObject tempParams;
+            addActionOptions (args, tempParams);
+            auto locator = parseLocatorOptions (args);
+            auto sourceRef = !locator.isVoid() ? juce::String() : popFront (args);
+
+            if (targetRef.isEmpty() && targetLocator.isVoid() && !args.isEmpty())
+                targetRef = popFront (args);
+
+            auto params = object ({ { "ref", sourceRef }, { "targetRef", targetRef } });
+
+            if (steps.isNotEmpty())
+                params.getDynamicObject()->setProperty ("steps", steps.getIntValue());
+
+            params.getDynamicObject()->setProperty ("timeoutMs", tempParams.getProperty ("timeoutMs"));
+            params.getDynamicObject()->setProperty ("force", tempParams.getProperty ("force"));
+            params.getDynamicObject()->setProperty ("trial", tempParams.getProperty ("trial"));
+            addLocatorIfPresent (*params.getDynamicObject(), locator);
+
+            if (!targetLocator.isVoid())
+                params.getDynamicObject()->setProperty ("targetLocator", targetLocator);
+
+            printResult (request (*sessionObject, "drag_to", params));
+            return 0;
+        }
+
         if (command == "drag")
         {
             auto dx = optionValue (args, "--dx", "0").getIntValue();
             auto dy = optionValue (args, "--dy", "0").getIntValue();
+            auto steps = optionValue (args, "--steps");
             juce::DynamicObject tempParams;
             addActionOptions (args, tempParams);
             auto locator = parseLocatorOptions (args);
             auto params = object ({ { "ref", args.size() >= 1 ? args[0] : juce::String() }, { "dx", dx }, { "dy", dy } });
+
+            if (steps.isNotEmpty())
+                params.getDynamicObject()->setProperty ("steps", steps.getIntValue());
+
             params.getDynamicObject()->setProperty ("timeoutMs", tempParams.getProperty ("timeoutMs"));
             params.getDynamicObject()->setProperty ("force", tempParams.getProperty ("force"));
             params.getDynamicObject()->setProperty ("trial", tempParams.getProperty ("trial"));
