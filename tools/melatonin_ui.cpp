@@ -259,6 +259,18 @@ namespace
             hasLocator = true;
         }
 
+        if (hasFlag (args, "--selected"))
+        {
+            locator->setProperty ("selected", true);
+            hasLocator = true;
+        }
+
+        if (hasFlag (args, "--not-selected"))
+        {
+            locator->setProperty ("selected", false);
+            hasLocator = true;
+        }
+
         return hasLocator ? juce::var (locator) : juce::var();
     }
 
@@ -380,6 +392,7 @@ namespace
                                                    { "visible", booleanSchema() },
                                                    { "enabled", booleanSchema() },
                                                    { "focused", booleanSchema() },
+                                                   { "selected", booleanSchema() },
                                                    { "nth", numberSchema() } }) } });
     }
 
@@ -811,7 +824,7 @@ namespace
             << "  melatonin-ui -s <session> windows\n"
             << "  melatonin-ui -s <session> trace-start --file trace.json\n"
             << "  melatonin-ui -s <session> trace-stop\n"
-            << "  melatonin-ui -s <session> locator [--role role] [--name text] [--text text] [--format json]\n"
+            << "  melatonin-ui -s <session> locator [--role role] [--name text] [--text text] [--selected] [--format json]\n"
             << "  melatonin-ui -s <session> snapshot [--format text|json] [--depth n]\n"
             << "  melatonin-ui -s <session> screenshot [--target root|--ref m1-1] [--source auto|component|native] --file /tmp/root.png\n"
             << "  melatonin-ui -s <session> click <ref> [--button left|right|middle] [--click-count n] [--position x,y]\n"

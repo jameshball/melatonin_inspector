@@ -925,6 +925,10 @@ namespace melatonin
                 }
             }
 
+            if (buttonName == "left" && clickCount == 1 && !hasClickPosition (params))
+                if (invokeAccessibleTreeItemClick (*target))
+                    return snapshotAfterAction();
+
             synthesizeComponentClick (*target, buttonModifiers, clickCount, localPoint);
             return snapshotAfterAction();
         }
@@ -1447,6 +1451,11 @@ namespace melatonin
             if (target != nullptr && target->keyPressed (key.keyPress))
                 return snapshotAfterAction();
 
+            if (target != nullptr)
+                for (auto* parent = target->getParentComponent(); parent != nullptr; parent = parent->getParentComponent())
+                    if (parent->keyPressed (key.keyPress))
+                        return snapshotAfterAction();
+
             if (auto* peer = getRootPeer())
                 peer->handleKeyPress (key.keyPress);
 
@@ -1714,7 +1723,8 @@ namespace melatonin
                                "exact",
                                "visible",
                                "enabled",
-                               "focused" })
+                               "focused",
+                               "selected" })
             {
                 if (!params.getProperty (name).isVoid())
                     return &params;
@@ -1806,6 +1816,7 @@ namespace melatonin
 
             if (!matchesOptionalBool (node, locatorObject, "enabled", "enabled")) return false;
             if (!matchesOptionalBool (node, locatorObject, "focused", "focused")) return false;
+            if (!matchesOptionalBool (node, locatorObject, "selected", "selected")) return false;
 
             if (!locatorObject.getProperty ("visible").isVoid())
             {
@@ -2171,6 +2182,22 @@ namespace melatonin
             auto* found = findComponentAt (*coordinateRoot, rootBounds.getCentre());
 
             return found == &target || (found != nullptr && target.isParentOf (found));
+        }
+
+        bool invokeAccessibleTreeItemClick (juce::Component& target) const
+        {
+            auto* handler = target.getAccessibilityHandler();
+
+            if (handler == nullptr || handler->getRole() != juce::AccessibilityRole::treeItem)
+                return false;
+
+            auto& actions = handler->getActions();
+
+            if (!handler->getCurrentState().isSelected())
+                actions.invoke (juce::AccessibilityActionType::toggle);
+
+            actions.invoke (juce::AccessibilityActionType::press);
+            return true;
         }
 
         static bool parseMouseButton (const juce::String& buttonName, juce::ModifierKeys& modifiers)
@@ -2565,6 +2592,13 @@ namespace melatonin
                 node->setProperty ("role", accessibilityRoleName (handler->getRole()));
                 node->setProperty ("title", handler->getTitle());
 
+                auto state = handler->getCurrentState();
+                node->setProperty ("selectable", state.isSelectable() || state.isMultiSelectable());
+                node->setProperty ("selected", state.isSelected());
+                node->setProperty ("expandable", state.isExpandable());
+                node->setProperty ("expanded", state.isExpanded());
+                node->setProperty ("collapsed", state.isCollapsed());
+
                 if (handler->getValueInterface() != nullptr)
                     node->setProperty ("value", handler->getValueInterface()->getCurrentValueAsString());
             }
@@ -2817,6 +2851,11 @@ namespace melatonin
                                "role",
                                "title",
                                "value",
+                               "selectable",
+                               "selected",
+                               "expandable",
+                               "expanded",
+                               "collapsed",
                                "toggleable",
                                "toggleState",
                                "checked",

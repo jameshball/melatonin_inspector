@@ -467,12 +467,12 @@ namespace
 
         void scrollListItemIntoView (const juce::String& name)
         {
-            for (int attempt = 0; attempt < 40; ++attempt)
+            for (int attempt = 0; attempt < 80; ++attempt)
             {
                 if (tryRunCli ({ "-s", sessionName, "wait-for-locator", "--role", "listItem", "--name", name, "--exact", "--timeout-ms", "300" }, 1000))
                     return;
 
-                runCli ({ "-s", sessionName, "wheel", "231", "300", "--dy", "-8" });
+                runCli ({ "-s", sessionName, "wheel", "231", "300", "--dy", "-12" });
                 runCli ({ "-s", sessionName, "wait", "--ms", "100" });
             }
 
@@ -761,24 +761,24 @@ namespace
 
         void exerciseValueTreesDemo()
         {
-            auto before = captureScreenshot ("value-trees-before-scroll.png");
+            auto before = captureScreenshot ("value-trees-before-delete.png");
             auto beforeCount = locatorCount ({ "--role", "treeItem", "--visible" }, "ValueTrees tree items");
             require (beforeCount > 4, "ValueTrees demo did not expose enough tree items");
 
-            auto scrollBar = firstLocatorMatch ({ "--class", "juce::ScrollBar", "--nth", "0", "--visible" },
-                                                "ValueTrees scrollbar");
-            auto scrollBounds = boundsOf (scrollBar);
-            runCli ({ "-s", sessionName, "drag-xy",
-                      juce::String (scrollBounds.getCentreX()),
-                      juce::String (scrollBounds.getY() + 24),
-                      juce::String (scrollBounds.getCentreX()),
-                      juce::String (scrollBounds.getBottom() - 24),
-                      "--steps", "8" });
-            runCli ({ "-s", sessionName, "wait", "--ms", "250" });
-            auto afterScroll = captureScreenshot ("value-trees-after-scroll.png");
-            assertScreenshotsDiffer (before, afterScroll, "ValueTrees tree scroll", 4);
+            runCli ({ "-s", sessionName, "click", "--role", "treeItem", "--nth", "4", "--visible", "--force", "--timeout-ms", "3000" });
+            require (locatorCount ({ "--role", "treeItem", "--selected", "--visible" }, "ValueTrees selected tree item") == 1,
+                     "ValueTrees tree item click did not select exactly one visible item");
+
+            runCli ({ "-s", sessionName, "press", "backspace", "--role", "treeItem", "--selected", "--visible", "--force" });
+            auto afterDeleteCount = locatorCount ({ "--role", "treeItem", "--visible" }, "ValueTrees tree items after delete");
+            require (afterDeleteCount < beforeCount, "ValueTrees delete did not reduce the visible tree item count");
+            auto afterDelete = captureScreenshot ("value-trees-after-delete.png");
+            assertScreenshotsDiffer (before, afterDelete, "ValueTrees delete", 4);
+
             runCli ({ "-s", sessionName, "click", "--role", "button", "--name", "Undo", "--exact", "--timeout-ms", "3000" });
-            captureScreenshot ("value-trees-after-undo-click.png");
+            auto afterUndoCount = locatorCount ({ "--role", "treeItem", "--visible" }, "ValueTrees tree items after undo");
+            require (afterUndoCount >= beforeCount, "ValueTrees undo did not restore the deleted tree item");
+            captureScreenshot ("value-trees-after-undo.png");
         }
 
         void exerciseXmlAndJsonDemo()
