@@ -368,6 +368,29 @@ namespace
             assertPng (buttonScreenshot, "button screenshot");
             assertPngSize (buttonScreenshot, editorButtonBounds.getWidth(), editorButtonBounds.getHeight(), "button screenshot");
 
+            auto locatorButtonScreenshot = screenshotDirectory.getChildFile ("melatonin-automation-e2e-button-locator.png");
+            runCli ({ "-s", sessionName, "screenshot", "--component-id", "nav.editor", "--file", locatorButtonScreenshot.getFullPathName(), "--no-base64" });
+            assertPngSize (locatorButtonScreenshot, editorButtonBounds.getWidth(), editorButtonBounds.getHeight(), "locator button screenshot");
+
+            auto clippedScreenshot = screenshotDirectory.getChildFile ("melatonin-automation-e2e-clip.png");
+            runCli ({ "-s",
+                      sessionName,
+                      "screenshot",
+                      "--target",
+                      "root",
+                      "--clip-x",
+                      "0",
+                      "--clip-y",
+                      "0",
+                      "--clip-w",
+                      "50",
+                      "--clip-h",
+                      "40",
+                      "--file",
+                      clippedScreenshot.getFullPathName(),
+                      "--no-base64" });
+            assertPngSize (clippedScreenshot, 50, 40, "clipped screenshot");
+
             clickXYAtNode (findByComponentName (snapshot, "controls.power"));
             snapshot = readSnapshot();
             require (asObject (snapshot, "snapshot after click").getProperty ("stateHash").toString() != initialStateHash,

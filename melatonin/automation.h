@@ -488,13 +488,27 @@ namespace melatonin
             if (ref.isNotEmpty() && target == nullptr)
                 return error ("stale_ref", "Run snapshot again.");
 
-            if (ref.isEmpty() && (targetName == "root" || target == nullptr))
+            if (!hasTargetSelector (params) && ref.isEmpty() && (targetName == "root" || target == nullptr))
                 target = root.getComponent();
 
             if (target == nullptr)
                 return error ("stale_ref", "Run snapshot again.");
 
-            auto image = target->createComponentSnapshot (target->getLocalBounds(), false, 1.0f);
+            auto area = target->getLocalBounds();
+
+            if (!params.getProperty ("clipW").isVoid() || !params.getProperty ("clipH").isVoid())
+            {
+                area = { getInt (params, "clipX", 0),
+                         getInt (params, "clipY", 0),
+                         getInt (params, "clipW", area.getWidth()),
+                         getInt (params, "clipH", area.getHeight()) };
+                area = area.getIntersection (target->getLocalBounds());
+            }
+
+            if (area.isEmpty())
+                return error ("screenshot_failed", "Screenshot clip is empty.");
+
+            auto image = target->createComponentSnapshot (area, false, (float) getDouble (params, "scale", 1.0));
 
             if (image.isNull())
                 return error ("screenshot_failed", "Could not create component snapshot.");
@@ -527,11 +541,15 @@ namespace melatonin
                 absolutePath = file.getFullPathName();
             }
 
-            return object ({ { "mimeType", "image/png" },
-                             { "width", image.getWidth() },
-                             { "height", image.getHeight() },
-                             { "file", absolutePath },
-                             { "base64", juce::Base64::toBase64 (pngBytes.getData(), pngBytes.getSize()) } });
+            auto result = object ({ { "mimeType", "image/png" },
+                                    { "width", image.getWidth() },
+                                    { "height", image.getHeight() },
+                                    { "file", absolutePath } });
+
+            if (params.getProperty ("includeBase64").isVoid() || (bool) params.getProperty ("includeBase64"))
+                result.getDynamicObject()->setProperty ("base64", juce::Base64::toBase64 (pngBytes.getData(), pngBytes.getSize()));
+
+            return result;
         }
 
         juce::var writableArtifactFile (const juce::String& requestedPath) const
@@ -1868,6 +1886,12 @@ namespace melatonin
         {
             auto value = object.getProperty (name);
             return value.isVoid() ? fallback : (int) value;
+        }
+
+        static double getDouble (juce::DynamicObject& object, const juce::Identifier& name, double fallback)
+        {
+            auto value = object.getProperty (name);
+            return value.isVoid() ? fallback : (double) value;
         }
 
         static juce::String defaultSessionName()

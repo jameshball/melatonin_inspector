@@ -381,7 +381,14 @@ namespace
                   toolSchema ({ { "session", stringSchema() },
                                 { "target", object ({ { "type", "string" }, { "default", "root" } }) },
                                 { "ref", stringSchema() },
-                                { "file", stringSchema() } })),
+                                { "locator", locatorSchema() },
+                                { "file", stringSchema() },
+                                { "clipX", numberSchema() },
+                                { "clipY", numberSchema() },
+                                { "clipW", numberSchema() },
+                                { "clipH", numberSchema() },
+                                { "scale", numberSchema() },
+                                { "includeBase64", booleanSchema() } })),
             tool ("juce_click",
                   "Click a component ref and return a fresh snapshot.",
                   toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() } })),
@@ -804,8 +811,22 @@ int main (int argc, char* argv[])
             auto file = optionValue (args, "--file");
             auto ref = optionValue (args, "--ref");
             auto target = optionValue (args, "--target", "root");
+            auto clipX = optionValue (args, "--clip-x");
+            auto clipY = optionValue (args, "--clip-y");
+            auto clipW = optionValue (args, "--clip-w");
+            auto clipH = optionValue (args, "--clip-h");
+            auto scale = optionValue (args, "--scale");
+            auto includeBase64 = !hasFlag (args, "--no-base64");
             auto locator = parseLocatorOptions (args);
             auto params = object ({ { "file", file }, { "ref", ref }, { "target", target } });
+
+            if (clipX.isNotEmpty()) params.getDynamicObject()->setProperty ("clipX", clipX.getIntValue());
+            if (clipY.isNotEmpty()) params.getDynamicObject()->setProperty ("clipY", clipY.getIntValue());
+            if (clipW.isNotEmpty()) params.getDynamicObject()->setProperty ("clipW", clipW.getIntValue());
+            if (clipH.isNotEmpty()) params.getDynamicObject()->setProperty ("clipH", clipH.getIntValue());
+            if (scale.isNotEmpty()) params.getDynamicObject()->setProperty ("scale", scale.getDoubleValue());
+
+            params.getDynamicObject()->setProperty ("includeBase64", includeBase64);
             addActionOptions (args, *params.getDynamicObject());
             addLocatorIfPresent (*params.getDynamicObject(), locator);
             auto result = request (*sessionObject, "screenshot", params);
