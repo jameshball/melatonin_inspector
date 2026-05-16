@@ -312,7 +312,7 @@ namespace melatonin
 
             if (method == "wait_for_locator")
             {
-                auto result = resolveLocatorQuery (params, false, false);
+                auto result = resolveLocatorQuery (params, true, false);
 
                 if (isError (result))
                     return result;
@@ -325,21 +325,26 @@ namespace melatonin
 
             if (method == "wait_for_text")
             {
+                const auto expected = getString (params, "text", {});
+
+                if (expected.isEmpty())
+                    return error ("invalid_text", "wait_for_text requires non-empty text.");
+
                 juce::DynamicObject snapshotParams;
-                snapshotParams.setProperty ("format", "text");
+                snapshotParams.setProperty ("format", "json");
                 snapshotParams.setProperty ("depth", getInt (params, "depth", 12));
                 auto result = snapshot (snapshotParams);
                 auto* object = result.getDynamicObject();
-                auto text = object != nullptr ? object->getProperty ("text").toString() : juce::String();
+                auto tree = object != nullptr ? object->getProperty ("tree") : juce::var();
 
-                return normalizeForLocator (text).contains (normalizeForLocator (getString (params, "text", {})))
+                return treeContainsText (tree, expected, (bool) params.getProperty ("exact"), params.getProperty ("visible"))
                            ? result
                            : error ("wait_not_ready", "Text was not found.");
             }
 
             if (method == "wait_for_value")
             {
-                auto resolution = resolveTarget (params, false, true);
+                auto resolution = resolveTarget (params, true, true);
 
                 if (!resolution.error.isVoid())
                     return resolution.error;
@@ -1462,6 +1467,30 @@ namespace melatonin
             return node.getProperty ("name").toString() + " "
                    + node.getProperty ("title").toString() + " "
                    + node.getProperty ("value").toString();
+        }
+
+        static bool treeContainsText (const juce::var& node, const juce::String& expected, bool exact, const juce::var& visible)
+        {
+            auto* object = node.getDynamicObject();
+
+            if (object == nullptr)
+                return false;
+
+            const auto nodeVisible = (bool) object->getProperty ("visible");
+            const auto visibilityMatches = visible.isVoid() ? nodeVisible
+                                                            : nodeVisible == (bool) visible;
+
+            if (visibilityMatches && matchesString (searchableText (*object), expected, exact))
+                return true;
+
+            auto children = object->getProperty ("children");
+
+            if (children.isArray())
+                for (const auto& child : *children.getArray())
+                    if (treeContainsText (child, expected, exact, visible))
+                        return true;
+
+            return false;
         }
 
         static juce::String semanticValueFor (juce::Component& component)

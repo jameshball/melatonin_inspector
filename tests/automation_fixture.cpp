@@ -346,6 +346,16 @@ namespace
             require ((int) asObject (hiddenLocator, "hidden locator").getProperty ("count") == 1,
                      "hidden locator did not find editor.text before its tab was selected");
 
+            auto hiddenWaitFailure = runCliExpectFailure ({ "-s", sessionName, "wait-for-locator", "--component-name", "editor.text", "--timeout-ms", "100" });
+            require (hiddenWaitFailure.contains ("Timed out") || hiddenWaitFailure.contains ("Locator did not match"),
+                     "wait-for-locator should default to visible components\n" + hiddenWaitFailure);
+            runCli ({ "-s", sessionName, "wait-for-locator", "--component-name", "editor.text", "--hidden", "--timeout-ms", "500" });
+
+            auto hiddenTextFailure = runCliExpectFailure ({ "-s", sessionName, "wait-for-text", "--exact", "Editor Page", "--timeout-ms", "100" });
+            require (hiddenTextFailure.contains ("Timed out") || hiddenTextFailure.contains ("Text was not found"),
+                     "wait-for-text should default to visible text\n" + hiddenTextFailure);
+            runCli ({ "-s", sessionName, "wait-for-text", "--hidden", "--exact", "Editor Page", "--timeout-ms", "500" });
+
             auto disabledLocator = readLocator ({ "--component-name", "controls.disabled", "--disabled" });
             require ((int) asObject (disabledLocator, "disabled locator").getProperty ("count") == 1,
                      "disabled locator did not find controls.disabled");
@@ -677,6 +687,7 @@ namespace
 
             bool foundSnapshotTool = false;
             bool foundLocatorTool = false;
+            bool foundWaitForTextTool = false;
 
             for (const auto& toolInfo : *tools.getArray())
             {
@@ -685,10 +696,14 @@ namespace
 
                 if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_locator")
                     foundLocatorTool = true;
+
+                if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_wait_for_text")
+                    foundWaitForTextTool = true;
             }
 
             require (foundSnapshotTool, "MCP tools/list did not expose juce_snapshot");
             require (foundLocatorTool, "MCP tools/list did not expose juce_locator");
+            require (foundWaitForTextTool, "MCP tools/list did not expose juce_wait_for_text");
 
             auto capabilitiesCallResult = assertMcpResult (parseMcpLine (lines, 2), 3);
             auto& capabilitiesCall = asObject (capabilitiesCallResult, "MCP capabilities result");

@@ -464,7 +464,22 @@ namespace
                               { "name" })),
             tool ("juce_wait",
                   "Wait briefly and return a fresh snapshot.",
-                  toolSchema ({ { "session", stringSchema() }, { "ms", object ({ { "type", "number" }, { "default", 250 } }) } }))
+                  toolSchema ({ { "session", stringSchema() }, { "ms", object ({ { "type", "number" }, { "default", 250 } }) } })),
+            tool ("juce_wait_for_ref",
+                  "Wait for a previously returned component ref to remain attached.",
+                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "timeoutMs", numberSchema() } }, { "ref" })),
+            tool ("juce_wait_for_locator",
+                  "Wait for a visible locator match unless the locator requests hidden components.",
+                  toolSchema ({ { "session", stringSchema() }, { "locator", locatorSchema() }, { "timeoutMs", numberSchema() } }, { "locator" })),
+            tool ("juce_wait_for_text",
+                  "Wait for visible text in the component tree.",
+                  toolSchema ({ { "session", stringSchema() }, { "text", stringSchema() }, { "timeoutMs", numberSchema() }, { "exact", booleanSchema() }, { "visible", booleanSchema() } }, { "text" })),
+            tool ("juce_wait_for_value",
+                  "Wait for a semantic component value to match.",
+                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "value", stringSchema() }, { "timeoutMs", numberSchema() }, { "exact", booleanSchema() } }, { "value" })),
+            tool ("juce_wait_for_snapshot_change",
+                  "Wait for the snapshot state hash to differ from a previous state hash.",
+                  toolSchema ({ { "session", stringSchema() }, { "stateHash", stringSchema() }, { "timeoutMs", numberSchema() } }, { "stateHash" }))
         });
     }
 
@@ -1124,8 +1139,25 @@ int main (int argc, char* argv[])
         if (command == "wait-for-text")
         {
             auto timeout = optionValue (args, "--timeout-ms", "5000").getIntValue();
-            printResult (request (*sessionObject, "wait_for_text", object ({ { "text", args.joinIntoString (" ") },
-                                                                             { "timeoutMs", timeout } })));
+            auto depth = optionValue (args, "--depth");
+            auto exact = hasFlag (args, "--exact");
+            auto hidden = hasFlag (args, "--hidden");
+            auto visible = hasFlag (args, "--visible");
+            auto params = object ({ { "text", args.joinIntoString (" ") },
+                                    { "timeoutMs", timeout } });
+
+            if (depth.isNotEmpty())
+                params.getDynamicObject()->setProperty ("depth", depth.getIntValue());
+
+            if (exact)
+                params.getDynamicObject()->setProperty ("exact", true);
+
+            if (hidden)
+                params.getDynamicObject()->setProperty ("visible", false);
+            else if (visible)
+                params.getDynamicObject()->setProperty ("visible", true);
+
+            printResult (request (*sessionObject, "wait_for_text", params));
             return 0;
         }
 
