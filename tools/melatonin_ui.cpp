@@ -190,6 +190,84 @@ namespace
         return text;
     }
 
+    juce::var parseLocatorOptions (juce::StringArray& args)
+    {
+        auto* locator = new juce::DynamicObject();
+        bool hasLocator = false;
+
+        auto addString = [&] (const juce::String& option, const juce::String& property) {
+            auto value = optionValue (args, option);
+
+            if (value.isNotEmpty())
+            {
+                locator->setProperty (property, value);
+                hasLocator = true;
+            }
+        };
+
+        addString ("--role", "role");
+        addString ("--name", "name");
+        addString ("--text", "text");
+        addString ("--component-id", "componentId");
+        addString ("--component-name", "componentName");
+        addString ("--test-id", "testId");
+        addString ("--class", "class");
+        addString ("--value", "value");
+        addString ("--has-text", "hasText");
+
+        auto nth = optionValue (args, "--nth");
+
+        if (nth.isNotEmpty())
+        {
+            locator->setProperty ("nth", nth.getIntValue());
+            hasLocator = true;
+        }
+
+        if (hasFlag (args, "--exact"))
+        {
+            locator->setProperty ("exact", true);
+            hasLocator = true;
+        }
+
+        if (hasFlag (args, "--visible"))
+        {
+            locator->setProperty ("visible", true);
+            hasLocator = true;
+        }
+
+        if (hasFlag (args, "--hidden"))
+        {
+            locator->setProperty ("visible", false);
+            hasLocator = true;
+        }
+
+        if (hasFlag (args, "--enabled"))
+        {
+            locator->setProperty ("enabled", true);
+            hasLocator = true;
+        }
+
+        if (hasFlag (args, "--disabled"))
+        {
+            locator->setProperty ("enabled", false);
+            hasLocator = true;
+        }
+
+        if (hasFlag (args, "--focused"))
+        {
+            locator->setProperty ("focused", true);
+            hasLocator = true;
+        }
+
+        return hasLocator ? juce::var (locator) : juce::var();
+    }
+
+    void addLocatorIfPresent (juce::DynamicObject& params, const juce::var& locator)
+    {
+        if (!locator.isVoid())
+            params.setProperty ("locator", locator);
+    }
+
     juce::var object (std::initializer_list<std::pair<juce::String, juce::var>> properties)
     {
         auto* result = new juce::DynamicObject();
@@ -225,6 +303,30 @@ namespace
         return object ({ { "type", "number" } });
     }
 
+    juce::var booleanSchema()
+    {
+        return object ({ { "type", "boolean" } });
+    }
+
+    juce::var locatorSchema()
+    {
+        return object ({ { "type", "object" },
+                         { "properties", object ({ { "role", stringSchema() },
+                                                   { "name", stringSchema() },
+                                                   { "text", stringSchema() },
+                                                   { "componentId", stringSchema() },
+                                                   { "componentName", stringSchema() },
+                                                   { "testId", stringSchema() },
+                                                   { "class", stringSchema() },
+                                                   { "value", stringSchema() },
+                                                   { "hasText", stringSchema() },
+                                                   { "exact", booleanSchema() },
+                                                   { "visible", booleanSchema() },
+                                                   { "enabled", booleanSchema() },
+                                                   { "focused", booleanSchema() },
+                                                   { "nth", numberSchema() } }) } });
+    }
+
     juce::var toolSchema (std::initializer_list<std::pair<juce::String, juce::var>> properties,
                           std::initializer_list<juce::var> required = {})
     {
@@ -250,6 +352,9 @@ namespace
             tool ("juce_capabilities",
                   "Return protocol, feature, and security capabilities for a running automation session.",
                   toolSchema ({ { "session", stringSchema() } })),
+            tool ("juce_locator",
+                  "Find JUCE components by Playwright-style locator fields.",
+                  toolSchema ({ { "session", stringSchema() }, { "locator", locatorSchema() } }, { "locator" })),
             tool ("juce_snapshot",
                   "Return a compact Playwright-style snapshot of a JUCE component tree.",
                   toolSchema ({ { "session", stringSchema() },
@@ -265,32 +370,32 @@ namespace
                                 { "file", stringSchema() } })),
             tool ("juce_click",
                   "Click a component ref and return a fresh snapshot.",
-                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() } }, { "ref" })),
+                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() } })),
             tool ("juce_click_xy",
                   "Click root-local coordinates and return a fresh snapshot.",
                   toolSchema ({ { "session", stringSchema() }, { "x", numberSchema() }, { "y", numberSchema() } }, { "x", "y" })),
             tool ("juce_type",
                   "Type text into a component ref and return a fresh snapshot.",
-                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "text", stringSchema() } }, { "ref", "text" })),
+                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "text", stringSchema() } }, { "text" })),
             tool ("juce_press",
                   "Press a key and return a fresh snapshot.",
-                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "key", stringSchema() } }, { "key" })),
+                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "key", stringSchema() } }, { "key" })),
             tool ("juce_drag",
                   "Drag a component by a delta and return a fresh snapshot.",
-                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "dx", numberSchema() }, { "dy", numberSchema() } }, { "ref" })),
+                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "dx", numberSchema() }, { "dy", numberSchema() } })),
             tool ("juce_set_bounds",
                   "Set a component's bounds and return a fresh snapshot.",
                   toolSchema ({ { "session", stringSchema() },
                                 { "ref", stringSchema() },
+                                { "locator", locatorSchema() },
                                 { "x", numberSchema() },
                                 { "y", numberSchema() },
                                 { "w", numberSchema() },
-                                { "h", numberSchema() } },
-                              { "ref" })),
+                                { "h", numberSchema() } })),
             tool ("juce_set_property",
                   "Set a component property and return a fresh snapshot.",
-                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "name", stringSchema() }, { "value", emptyObject() } },
-                              { "ref", "name" })),
+                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "name", stringSchema() }, { "value", emptyObject() } },
+                              { "name" })),
             tool ("juce_wait",
                   "Wait briefly and return a fresh snapshot.",
                   toolSchema ({ { "session", stringSchema() }, { "ms", object ({ { "type", "number" }, { "default", 250 } }) } }))
@@ -301,6 +406,7 @@ namespace
     {
         if (name == "juce_snapshot") return "snapshot";
         if (name == "juce_capabilities") return "capabilities";
+        if (name == "juce_locator") return "locator";
         if (name == "juce_screenshot") return "screenshot";
         if (name == "juce_click") return "click";
         if (name == "juce_click_xy") return "click_xy";
@@ -387,6 +493,9 @@ namespace
         }
 
         if (name == "juce_snapshot" && args->getProperty ("format").toString() == "json")
+            return mcpTextContent (juce::JSON::toString (result, true));
+
+        if (name == "juce_locator")
             return mcpTextContent (juce::JSON::toString (result, true));
 
         if (auto* resultObject = result.getDynamicObject())
@@ -514,6 +623,7 @@ namespace
             << "  melatonin-ui list\n"
             << "  melatonin-ui mcp\n"
             << "  melatonin-ui -s <session> capabilities\n"
+            << "  melatonin-ui -s <session> locator [--role role] [--name text] [--text text] [--format json]\n"
             << "  melatonin-ui -s <session> snapshot [--format text|json] [--depth n]\n"
             << "  melatonin-ui -s <session> screenshot [--target root|--ref m1-1] --file /tmp/root.png\n"
             << "  melatonin-ui -s <session> click <ref>\n"
@@ -601,6 +711,15 @@ int main (int argc, char* argv[])
             return 0;
         }
 
+        if (command == "locator")
+        {
+            auto format = optionValue (args, "--format", "json");
+            auto locator = parseLocatorOptions (args);
+            auto params = object ({ { "locator", locator } });
+            printResult (request (*sessionObject, "locator", params), format == "json");
+            return 0;
+        }
+
         if (command == "capabilities")
         {
             printResult (request (*sessionObject, "capabilities", emptyObject()), true);
@@ -612,14 +731,20 @@ int main (int argc, char* argv[])
             auto file = optionValue (args, "--file");
             auto ref = optionValue (args, "--ref");
             auto target = optionValue (args, "--target", "root");
-            auto result = request (*sessionObject, "screenshot", object ({ { "file", file }, { "ref", ref }, { "target", target } }));
+            auto locator = parseLocatorOptions (args);
+            auto params = object ({ { "file", file }, { "ref", ref }, { "target", target } });
+            addLocatorIfPresent (*params.getDynamicObject(), locator);
+            auto result = request (*sessionObject, "screenshot", params);
             printResult (result);
             return 0;
         }
 
-        if (command == "click" && args.size() >= 1)
+        if (command == "click")
         {
-            printResult (request (*sessionObject, "click", object ({ { "ref", args[0] } })));
+            auto locator = parseLocatorOptions (args);
+            auto params = object ({ { "ref", args.size() >= 1 ? args[0] : juce::String() } });
+            addLocatorIfPresent (*params.getDynamicObject(), locator);
+            printResult (request (*sessionObject, "click", params));
             return 0;
         }
 
@@ -629,41 +754,61 @@ int main (int argc, char* argv[])
             return 0;
         }
 
-        if (command == "type" && args.size() >= 2)
+        if (command == "type")
         {
-            auto ref = popFront (args);
-            printResult (request (*sessionObject, "type", object ({ { "ref", ref }, { "text", args.joinIntoString (" ") } })));
+            auto locator = parseLocatorOptions (args);
+            auto ref = !locator.isVoid() ? juce::String() : popFront (args);
+            auto params = object ({ { "ref", ref }, { "text", args.joinIntoString (" ") } });
+            addLocatorIfPresent (*params.getDynamicObject(), locator);
+            printResult (request (*sessionObject, "type", params));
             return 0;
         }
 
         if (command == "press" && args.size() >= 1)
         {
             auto ref = optionValue (args, "--ref");
-            printResult (request (*sessionObject, "press", object ({ { "key", args[0] }, { "ref", ref } })));
+            auto locator = parseLocatorOptions (args);
+            auto params = object ({ { "key", args[0] }, { "ref", ref } });
+            addLocatorIfPresent (*params.getDynamicObject(), locator);
+            printResult (request (*sessionObject, "press", params));
             return 0;
         }
 
-        if (command == "drag" && args.size() >= 1)
+        if (command == "drag")
         {
             auto dx = optionValue (args, "--dx", "0").getIntValue();
             auto dy = optionValue (args, "--dy", "0").getIntValue();
-            printResult (request (*sessionObject, "drag", object ({ { "ref", args[0] }, { "dx", dx }, { "dy", dy } })));
+            auto locator = parseLocatorOptions (args);
+            auto params = object ({ { "ref", args.size() >= 1 ? args[0] : juce::String() }, { "dx", dx }, { "dy", dy } });
+            addLocatorIfPresent (*params.getDynamicObject(), locator);
+            printResult (request (*sessionObject, "drag", params));
             return 0;
         }
 
-        if (command == "set-bounds" && args.size() >= 1)
+        if (command == "set-bounds")
         {
             auto x = optionValue (args, "--x", "0").getIntValue();
             auto y = optionValue (args, "--y", "0").getIntValue();
             auto w = optionValue (args, "--w", "0").getIntValue();
             auto h = optionValue (args, "--h", "0").getIntValue();
-            printResult (request (*sessionObject, "set_bounds", object ({ { "ref", args[0] }, { "x", x }, { "y", y }, { "w", w }, { "h", h } })));
+            auto locator = parseLocatorOptions (args);
+            auto params = object ({ { "ref", args.size() >= 1 ? args[0] : juce::String() }, { "x", x }, { "y", y }, { "w", w }, { "h", h } });
+            addLocatorIfPresent (*params.getDynamicObject(), locator);
+            printResult (request (*sessionObject, "set_bounds", params));
             return 0;
         }
 
-        if (command == "set-property" && args.size() >= 3)
+        if (command == "set-property")
         {
-            printResult (request (*sessionObject, "set_property", object ({ { "ref", args[0] }, { "name", args[1] }, { "value", parseValue (args[2]) } })));
+            auto locator = parseLocatorOptions (args);
+            auto ref = !locator.isVoid() ? juce::String() : popFront (args);
+
+            if (args.size() < 2)
+                throw std::runtime_error ("set-property requires a property name and value");
+
+            auto params = object ({ { "ref", ref }, { "name", args[0] }, { "value", parseValue (args[1]) } });
+            addLocatorIfPresent (*params.getDynamicObject(), locator);
+            printResult (request (*sessionObject, "set_property", params));
             return 0;
         }
 

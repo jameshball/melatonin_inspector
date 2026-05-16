@@ -315,10 +315,36 @@ namespace
             require (!findByComponentName (snapshot, "fixture.tabs").isVoid(), "snapshot is missing top-level tabs");
             require (!findByComponentName (snapshot, "controls.slider").isVoid(), "snapshot is missing the controls slider");
 
+            auto buttonLocator = readLocator ({ "--role", "button", "--name", "Go Editor" });
+            require ((int) asObject (buttonLocator, "button locator").getProperty ("count") == 1,
+                     "role/name locator did not find Go Editor");
+
+            auto sliderLocator = readLocator ({ "--test-id", "controls.slider" });
+            require ((int) asObject (sliderLocator, "slider locator").getProperty ("count") == 1,
+                     "test id locator did not find controls.slider");
+
+            auto valueLocator = readLocator ({ "--value", "25" });
+            require ((int) asObject (valueLocator, "value locator").getProperty ("count") >= 1,
+                     "value locator did not find slider value 25");
+
+            auto hiddenLocator = readLocator ({ "--component-name", "editor.text", "--hidden" });
+            require ((int) asObject (hiddenLocator, "hidden locator").getProperty ("count") == 1,
+                     "hidden locator did not find editor.text before its tab was selected");
+
+            auto disabledLocator = readLocator ({ "--component-name", "controls.disabled", "--disabled" });
+            require ((int) asObject (disabledLocator, "disabled locator").getProperty ("count") == 1,
+                     "disabled locator did not find controls.disabled");
+
+            auto strictFailure = runCliExpectFailure ({ "-s", sessionName, "click", "--role", "button", "--name", "Duplicate" });
+            require (strictFailure.contains ("strict") || strictFailure.contains ("matched 2"),
+                     "duplicate locator should fail strict mode\n" + strictFailure);
+
             auto deniedScreenshot = screenshotDirectory.getSiblingFile ("melatonin-automation-denied.png");
             auto deniedOutput = runCliExpectFailure ({ "-s", sessionName, "screenshot", "--target", "root", "--file", deniedScreenshot.getFullPathName() });
             require (deniedOutput.contains ("artifact root") || deniedOutput.contains ("artifact_path_denied"),
                      "screenshot outside artifact root should fail with artifact_path_denied\n" + deniedOutput);
+
+            snapshot = readSnapshot();
 
             rootScreenshot = screenshotDirectory.getChildFile ("melatonin-automation-e2e-root.png");
             runCli ({ "-s", sessionName, "screenshot", "--target", "root", "--file", rootScreenshot.getFullPathName() });
@@ -347,7 +373,7 @@ namespace
                      "slider drag did not increase value: " + juce::String (sliderBefore) + " -> " + juce::String (sliderAfter));
             assertStatus (snapshot, "Status: Slider");
 
-            clickRef (refByComponentName (snapshot, "nav.editor"));
+            runCli ({ "-s", sessionName, "click", "--component-id", "nav.editor" });
             snapshot = readSnapshot();
             assertStatus (snapshot, "Status: Editor");
             require (!findByComponentName (snapshot, "editor.text").isVoid(), "editor page did not expose its text editor");
@@ -529,11 +555,12 @@ namespace
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}})",
                 R"({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})",
                 R"({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"juce_capabilities","arguments":{"session":"automation_fixture"}}})",
-                R"({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"juce_snapshot","arguments":{"session":"automation_fixture","format":"text","depth":12}}})"
+                R"({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"juce_locator","arguments":{"session":"automation_fixture","locator":{"componentName":"controls.slider"}}}})",
+                R"({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"juce_snapshot","arguments":{"session":"automation_fixture","format":"text","depth":12}}})"
             });
 
             auto lines = juce::StringArray::fromLines (output);
-            require (lines.size() >= 4, "MCP smoke expected at least 4 response lines, got " + juce::String (lines.size()) + "\n" + output);
+            require (lines.size() >= 5, "MCP smoke expected at least 5 response lines, got " + juce::String (lines.size()) + "\n" + output);
 
             auto initializeResult = assertMcpResult (parseMcpLine (lines, 0), 1);
             auto& initialize = asObject (initializeResult, "MCP initialize result");
@@ -547,12 +574,19 @@ namespace
             require (tools.isArray(), "MCP tools/list did not return a tools array");
 
             bool foundSnapshotTool = false;
+            bool foundLocatorTool = false;
 
             for (const auto& toolInfo : *tools.getArray())
+            {
                 if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_snapshot")
                     foundSnapshotTool = true;
 
+                if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_locator")
+                    foundLocatorTool = true;
+            }
+
             require (foundSnapshotTool, "MCP tools/list did not expose juce_snapshot");
+            require (foundLocatorTool, "MCP tools/list did not expose juce_locator");
 
             auto capabilitiesCallResult = assertMcpResult (parseMcpLine (lines, 2), 3);
             auto& capabilitiesCall = asObject (capabilitiesCallResult, "MCP capabilities result");
@@ -561,7 +595,14 @@ namespace
             require (asObject (capabilitiesContent.getArray()->getReference (0), "MCP capabilities content").getProperty ("text").toString().contains ("protocolVersion"),
                      "MCP capabilities content did not include protocolVersion");
 
-            auto snapshotCallResult = assertMcpResult (parseMcpLine (lines, 3), 4);
+            auto locatorCallResult = assertMcpResult (parseMcpLine (lines, 3), 4);
+            auto& locatorCall = asObject (locatorCallResult, "MCP locator result");
+            auto locatorContent = locatorCall.getProperty ("content");
+            require (locatorContent.isArray() && !locatorContent.getArray()->isEmpty(), "MCP locator did not return content");
+            require (asObject (locatorContent.getArray()->getReference (0), "MCP locator content").getProperty ("text").toString().contains ("controls.slider"),
+                     "MCP locator content did not include controls.slider");
+
+            auto snapshotCallResult = assertMcpResult (parseMcpLine (lines, 4), 5);
             auto& snapshotCall = asObject (snapshotCallResult, "MCP snapshot result");
             auto content = snapshotCall.getProperty ("content");
             require (content.isArray() && !content.getArray()->isEmpty(), "MCP snapshot did not return content");
@@ -574,6 +615,16 @@ namespace
         {
             auto parsed = juce::JSON::parse (runCli ({ "-s", sessionName, "snapshot", "--format", "json", "--depth", "12" }));
             asObject (parsed, "snapshot");
+            return parsed;
+        }
+
+        juce::var readLocator (std::initializer_list<juce::String> locatorArgs)
+        {
+            auto args = makeArgs ({ "-s", sessionName, "locator", "--format", "json" });
+            args.addArray (makeArgs (locatorArgs));
+
+            auto parsed = juce::JSON::parse (runCli (args));
+            asObject (parsed, "locator");
             return parsed;
         }
 
@@ -655,28 +706,49 @@ namespace
 
             title.setText ("Controls Page", juce::dontSendNotification);
             title.setName ("controls.title");
+            title.setComponentID ("controls.title");
             addAndMakeVisible (title);
 
             goEditor.setButtonText ("Go Editor");
             goEditor.setName ("nav.editor");
+            goEditor.setComponentID ("nav.editor");
             addAndMakeVisible (goEditor);
 
             toggle.setButtonText ("Power Toggle");
             toggle.setName ("controls.power");
+            toggle.setComponentID ("controls.power");
             addAndMakeVisible (toggle);
 
             slider.setName ("controls.slider");
+            slider.setComponentID ("controls.slider");
             slider.setRange (0.0, 100.0, 1.0);
             slider.setValue (25.0);
             slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 80, 24);
             addAndMakeVisible (slider);
 
             combo.setName ("controls.combo");
+            combo.setComponentID ("controls.combo");
             combo.addItem ("Alpha", 1);
             combo.addItem ("Beta", 2);
             combo.addItem ("Gamma", 3);
             combo.setSelectedId (1);
             addAndMakeVisible (combo);
+
+            duplicateA.setButtonText ("Duplicate");
+            duplicateA.setName ("controls.duplicateA");
+            duplicateA.setComponentID ("controls.duplicateA");
+            addAndMakeVisible (duplicateA);
+
+            duplicateB.setButtonText ("Duplicate");
+            duplicateB.setName ("controls.duplicateB");
+            duplicateB.setComponentID ("controls.duplicateB");
+            addAndMakeVisible (duplicateB);
+
+            disabled.setButtonText ("Disabled Action");
+            disabled.setName ("controls.disabled");
+            disabled.setComponentID ("controls.disabled");
+            disabled.setEnabled (false);
+            addAndMakeVisible (disabled);
         }
 
         void resized() override
@@ -690,12 +762,20 @@ namespace
             slider.setBounds (area.removeFromTop (36).removeFromLeft (360));
             area.removeFromTop (10);
             combo.setBounds (area.removeFromTop (30).removeFromLeft (180));
+            area.removeFromTop (10);
+            duplicateA.setBounds (area.removeFromTop (30).removeFromLeft (140));
+            duplicateB.setBounds (area.removeFromTop (30).removeFromLeft (140));
+            area.removeFromTop (10);
+            disabled.setBounds (area.removeFromTop (30).removeFromLeft (160));
         }
 
         juce::TextButton goEditor;
         juce::ToggleButton toggle;
         juce::Slider slider;
         juce::ComboBox combo;
+        juce::TextButton duplicateA;
+        juce::TextButton duplicateB;
+        juce::TextButton disabled;
 
     private:
         juce::Label title;
@@ -707,6 +787,7 @@ namespace
         DragBox()
         {
             setName ("advanced.dragBox");
+            setComponentID ("advanced.dragBox");
         }
 
         void paint (juce::Graphics& g) override
@@ -744,18 +825,22 @@ namespace
 
             title.setText ("Editor Page", juce::dontSendNotification);
             title.setName ("editor.title");
+            title.setComponentID ("editor.title");
             addAndMakeVisible (title);
 
             text.setName ("editor.text");
+            text.setComponentID ("editor.text");
             text.setTextToShowWhenEmpty ("Type here", juce::Colours::grey);
             addAndMakeVisible (text);
 
             apply.setButtonText ("Apply Text");
             apply.setName ("editor.apply");
+            apply.setComponentID ("editor.apply");
             addAndMakeVisible (apply);
 
             goAdvanced.setButtonText ("Go Advanced");
             goAdvanced.setName ("nav.advanced");
+            goAdvanced.setComponentID ("nav.advanced");
             addAndMakeVisible (goAdvanced);
         }
 
@@ -786,6 +871,7 @@ namespace
             setName ("Advanced Page");
 
             nestedTabs.setName ("advanced.tabs");
+            nestedTabs.setComponentID ("advanced.tabs");
             nestedTabs.addTab ("Metrics", juce::Colours::darkgrey, &metrics, false);
             nestedTabs.addTab ("Actions", juce::Colours::darkgrey, &actions, false);
             addAndMakeVisible (nestedTabs);
@@ -793,15 +879,18 @@ namespace
             metrics.setName ("Metrics Page");
             metricLabel.setText ("Metrics Ready", juce::dontSendNotification);
             metricLabel.setName ("advanced.metrics.label");
+            metricLabel.setComponentID ("advanced.metrics.label");
             metrics.addAndMakeVisible (metricLabel);
 
             goActions.setButtonText ("Go Actions");
             goActions.setName ("advanced.goActions");
+            goActions.setComponentID ("advanced.goActions");
             metrics.addAndMakeVisible (goActions);
 
             actions.setName ("Actions Page");
             reset.setButtonText ("Reset All");
             reset.setName ("advanced.reset");
+            reset.setComponentID ("advanced.reset");
             actions.addAndMakeVisible (reset);
 
             actions.addAndMakeVisible (dragBox);
@@ -849,10 +938,12 @@ namespace
             setName ("Automation Fixture Root");
 
             status.setName ("fixture.status");
+            status.setComponentID ("fixture.status");
             status.setText ("Status: Controls", juce::dontSendNotification);
             addAndMakeVisible (status);
 
             tabs.setName ("fixture.tabs");
+            tabs.setComponentID ("fixture.tabs");
             tabs.addTab ("Controls", juce::Colours::lightgrey, &controls, false);
             tabs.addTab ("Editor", juce::Colours::lightgrey, &editor, false);
             tabs.addTab ("Advanced", juce::Colours::lightgrey, &advanced, false);

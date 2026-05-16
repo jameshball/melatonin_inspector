@@ -110,6 +110,12 @@ namespace melatonin
             juce::Component::SafePointer<juce::Component> component;
         };
 
+        struct TargetResolution
+        {
+            juce::Component* component = nullptr;
+            juce::var error;
+        };
+
         juce::Component::SafePointer<juce::Component> root;
         AutomationOptions options;
         std::unique_ptr<juce::StreamingSocket> listener;
@@ -240,6 +246,15 @@ namespace melatonin
             if (method == "snapshot")
                 return snapshot (params);
 
+            if (method == "locator")
+                return locator (params);
+
+            if (method == "count")
+                return count (params);
+
+            if (method == "describe")
+                return describe (params);
+
             if (method == "screenshot")
                 return screenshot (params);
 
@@ -274,7 +289,7 @@ namespace melatonin
         {
             return object ({ { "protocolVersion", protocolVersion },
                              { "session", options.sessionName },
-                             { "features", object ({ { "locators", false },
+                             { "features", object ({ { "locators", true },
                                                      { "actionability", false },
                                                      { "semanticControls", false },
                                                      { "richInput", false },
@@ -309,14 +324,69 @@ namespace melatonin
             return object ({ { "generation", generation }, { "stateHash", stateHash }, { "text", text } });
         }
 
+        juce::var locator (juce::DynamicObject& params)
+        {
+            auto matchesOrError = resolveLocatorQuery (params, false, false);
+
+            if (isError (matchesOrError))
+                return matchesOrError;
+
+            return matchesOrError;
+        }
+
+        juce::var count (juce::DynamicObject& params)
+        {
+            auto matchesOrError = resolveLocatorQuery (params, false, false);
+
+            if (isError (matchesOrError))
+                return matchesOrError;
+
+            auto* result = matchesOrError.getDynamicObject();
+            return object ({ { "count", result != nullptr ? (int) result->getProperty ("count") : 0 } });
+        }
+
+        juce::var describe (juce::DynamicObject& params)
+        {
+            auto resolution = resolveTarget (params, false, true);
+
+            if (!resolution.error.isVoid())
+                return resolution.error;
+
+            juce::DynamicObject snapshotParams;
+            snapshotParams.setProperty ("format", "json");
+            snapshotParams.setProperty ("depth", 64);
+            auto query = resolveLocatorQuery (params, false, true);
+
+            if (isError (query))
+                return query;
+
+            auto* queryObject = query.getDynamicObject();
+            auto matches = queryObject != nullptr ? queryObject->getProperty ("matches") : juce::var();
+
+            if (matches.isArray() && !matches.getArray()->isEmpty())
+                return object ({ { "match", matches.getArray()->getReference (0) } });
+
+            return error ("locator_not_found", "Locator did not match any component.");
+        }
+
         juce::var screenshot (juce::DynamicObject& params)
         {
             if (root == nullptr)
                 return error ("no_root", "No root component is attached.");
 
             const auto ref = getString (params, "ref", {});
-            auto* target = getTargetComponent (ref);
+            juce::Component* target = nullptr;
             auto targetName = getString (params, "target", {});
+
+            if (hasTargetSelector (params))
+            {
+                auto resolution = resolveTarget (params, false, true);
+
+                if (!resolution.error.isVoid())
+                    return resolution.error;
+
+                target = resolution.component;
+            }
 
             if (ref.isNotEmpty() && target == nullptr)
                 return error ("stale_ref", "Run snapshot again.");
@@ -394,10 +464,12 @@ namespace melatonin
             if (!options.allowInput)
                 return error ("input_disabled", "Automation input is disabled for this session.");
 
-            auto* target = requireTarget (params);
+            auto resolution = resolveTarget (params, true, true);
 
-            if (target == nullptr)
-                return error ("stale_ref", "Run snapshot again.");
+            if (!resolution.error.isVoid())
+                return resolution.error;
+
+            auto* target = resolution.component;
 
             if (auto validationError = validateInputTarget (*target); !validationError.isVoid())
                 return validationError;
@@ -439,10 +511,12 @@ namespace melatonin
             if (!options.allowInput)
                 return error ("input_disabled", "Automation input is disabled for this session.");
 
-            auto* target = requireTarget (params);
+            auto resolution = resolveTarget (params, true, true);
 
-            if (target == nullptr)
-                return error ("stale_ref", "Run snapshot again.");
+            if (!resolution.error.isVoid())
+                return resolution.error;
+
+            auto* target = resolution.component;
 
             if (auto validationError = validateInputTarget (*target); !validationError.isVoid())
                 return validationError;
@@ -473,7 +547,17 @@ namespace melatonin
                 return error ("input_disabled", "Automation input is disabled for this session.");
 
             auto key = getString (params, "key", {});
-            auto* target = getTargetComponent (getString (params, "ref", {}));
+            juce::Component* target = nullptr;
+
+            if (hasTargetSelector (params))
+            {
+                auto resolution = resolveTarget (params, true, true);
+
+                if (!resolution.error.isVoid())
+                    return resolution.error;
+
+                target = resolution.component;
+            }
 
             if (target != nullptr)
             {
@@ -505,10 +589,12 @@ namespace melatonin
             if (!options.allowInput)
                 return error ("input_disabled", "Automation input is disabled for this session.");
 
-            auto* target = requireTarget (params);
+            auto resolution = resolveTarget (params, true, true);
 
-            if (target == nullptr)
-                return error ("stale_ref", "Run snapshot again.");
+            if (!resolution.error.isVoid())
+                return resolution.error;
+
+            auto* target = resolution.component;
 
             if (auto validationError = validateInputTarget (*target); !validationError.isVoid())
                 return validationError;
@@ -526,10 +612,12 @@ namespace melatonin
             if (!options.allowMutation)
                 return error ("mutation_disabled", "Automation mutation is disabled for this session.");
 
-            auto* target = requireTarget (params);
+            auto resolution = resolveTarget (params, true, true);
 
-            if (target == nullptr)
-                return error ("stale_ref", "Run snapshot again.");
+            if (!resolution.error.isVoid())
+                return resolution.error;
+
+            auto* target = resolution.component;
 
             target->setBounds (getInt (params, "x", target->getX()),
                                getInt (params, "y", target->getY()),
@@ -544,10 +632,12 @@ namespace melatonin
             if (!options.allowMutation)
                 return error ("mutation_disabled", "Automation mutation is disabled for this session.");
 
-            auto* target = requireTarget (params);
+            auto resolution = resolveTarget (params, true, true);
 
-            if (target == nullptr)
-                return error ("stale_ref", "Run snapshot again.");
+            if (!resolution.error.isVoid())
+                return resolution.error;
+
+            auto* target = resolution.component;
 
             const auto name = getString (params, "name", {});
             auto value = params.getProperty ("value");
@@ -583,6 +673,288 @@ namespace melatonin
             params.setProperty ("format", "text");
             params.setProperty ("depth", 8);
             return snapshot (params);
+        }
+
+        bool hasTargetSelector (juce::DynamicObject& params) const
+        {
+            return getString (params, "ref", {}).isNotEmpty() || params.getProperty ("locator").isObject();
+        }
+
+        TargetResolution resolveTarget (juce::DynamicObject& params, bool defaultVisible, bool requireStrict)
+        {
+            const auto ref = getString (params, "ref", {});
+            auto locatorValue = params.getProperty ("locator");
+            auto* locatorObject = locatorValue.getDynamicObject();
+
+            if (ref.isNotEmpty() && locatorObject != nullptr)
+                return { nullptr, error ("invalid_locator", "Pass either ref or locator, not both.") };
+
+            if (ref.isNotEmpty())
+            {
+                auto* target = getTargetComponent (ref);
+                return { target, target != nullptr ? juce::var() : error ("stale_ref", "Run snapshot again.") };
+            }
+
+            if (locatorObject == nullptr)
+                return { nullptr, error ("stale_ref", "Run snapshot again.") };
+
+            auto result = resolveLocatorQuery (*locatorObject, defaultVisible, requireStrict);
+
+            if (isError (result))
+                return { nullptr, result };
+
+            auto* resultObject = result.getDynamicObject();
+            auto matches = resultObject != nullptr ? resultObject->getProperty ("matches") : juce::var();
+
+            if (!matches.isArray() || matches.getArray()->isEmpty())
+                return { nullptr, error ("locator_not_found", "Locator did not match any component.") };
+
+            auto refValue = asObjectProperty (matches.getArray()->getReference (0), "ref");
+            auto* target = getTargetComponent (refValue);
+
+            return { target, target != nullptr ? juce::var() : error ("stale_ref", "Run snapshot again.") };
+        }
+
+        juce::DynamicObject* getLocatorObject (juce::DynamicObject& params) const
+        {
+            auto locatorValue = params.getProperty ("locator");
+
+            if (auto* locatorObject = locatorValue.getDynamicObject())
+                return locatorObject;
+
+            for (auto name : { "role",
+                               "name",
+                               "text",
+                               "componentId",
+                               "componentName",
+                               "testId",
+                               "class",
+                               "value",
+                               "hasText",
+                               "nth",
+                               "exact",
+                               "visible",
+                               "enabled",
+                               "focused" })
+            {
+                if (!params.getProperty (name).isVoid())
+                    return &params;
+            }
+
+            return nullptr;
+        }
+
+        juce::var resolveLocatorQuery (juce::DynamicObject& params, bool defaultVisible, bool requireStrict)
+        {
+            if (root == nullptr)
+                return error ("no_root", "No root component is attached.");
+
+            auto* locatorObject = getLocatorObject (params);
+
+            if (locatorObject == nullptr)
+                return error ("invalid_locator", "Locator must contain at least one field.");
+
+            refs.clear();
+            ++generation;
+
+            auto tree = serializeComponent (*root, 0, 64);
+            juce::Array<juce::var> matches;
+            collectLocatorMatches (matches, tree, *locatorObject, defaultVisible);
+
+            const auto nthValue = locatorObject->getProperty ("nth");
+
+            if (!nthValue.isVoid())
+            {
+                const auto nth = (int) nthValue;
+
+                if (juce::isPositiveAndBelow (nth, matches.size()))
+                {
+                    auto selected = matches[nth];
+                    matches.clear();
+                    matches.add (selected);
+                }
+                else
+                {
+                    matches.clear();
+                }
+            }
+
+            if (requireStrict)
+            {
+                if (matches.isEmpty())
+                    return error ("locator_not_found", "Locator did not match any component.");
+
+                if (matches.size() > 1)
+                    return error ("strict_mode_violation", "Locator matched " + juce::String (matches.size()) + " components: " + summarizeMatches (matches));
+            }
+
+            return object ({ { "generation", generation },
+                             { "stateHash", calculateStateHash (tree) },
+                             { "count", matches.size() },
+                             { "matches", matches } });
+        }
+
+        void collectLocatorMatches (juce::Array<juce::var>& matches, const juce::var& node, juce::DynamicObject& locatorObject, bool defaultVisible) const
+        {
+            auto* object = node.getDynamicObject();
+
+            if (object == nullptr)
+                return;
+
+            if (matchesLocator (*object, locatorObject, defaultVisible))
+                matches.add (summarizeNode (*object));
+
+            auto children = object->getProperty ("children");
+
+            if (children.isArray())
+                for (auto& child : *children.getArray())
+                    collectLocatorMatches (matches, child, locatorObject, defaultVisible);
+        }
+
+        bool matchesLocator (juce::DynamicObject& node, juce::DynamicObject& locatorObject, bool defaultVisible) const
+        {
+            const auto exact = (bool) locatorObject.getProperty ("exact");
+
+            if (!matchesOptionalString (node, locatorObject, "role", "role", exact)) return false;
+            if (!matchesOptionalText (searchableName (node), locatorObject, "name", exact)) return false;
+            if (!matchesOptionalText (searchableText (node), locatorObject, "text", exact)) return false;
+            if (!matchesOptionalString (node, locatorObject, "componentId", "componentId", true)) return false;
+            if (!matchesOptionalString (node, locatorObject, "componentId", "testId", true)) return false;
+            if (!matchesOptionalString (node, locatorObject, "componentName", "componentName", true)) return false;
+            if (!matchesOptionalString (node, locatorObject, "class", "class", exact)) return false;
+            if (!matchesOptionalString (node, locatorObject, "value", "value", exact)) return false;
+            if (!matchesOptionalText (searchableText (node), locatorObject, "hasText", exact)) return false;
+
+            if (!matchesOptionalBool (node, locatorObject, "enabled", "enabled")) return false;
+            if (!matchesOptionalBool (node, locatorObject, "focused", "focused")) return false;
+
+            if (!locatorObject.getProperty ("visible").isVoid())
+            {
+                if (!matchesOptionalBool (node, locatorObject, "visible", "visible"))
+                    return false;
+            }
+            else if (defaultVisible && !(bool) node.getProperty ("visible"))
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        static bool matchesOptionalString (juce::DynamicObject& node,
+                                           juce::DynamicObject& locatorObject,
+                                           const juce::Identifier& nodeProperty,
+                                           const juce::Identifier& locatorProperty,
+                                           bool exact)
+        {
+            auto expected = locatorObject.getProperty (locatorProperty);
+
+            if (expected.isVoid())
+                return true;
+
+            auto actual = node.getProperty (nodeProperty).toString();
+            return matchesString (actual, expected.toString(), exact);
+        }
+
+        static bool matchesOptionalText (const juce::String& actual, juce::DynamicObject& locatorObject, const juce::Identifier& locatorProperty, bool exact)
+        {
+            auto expected = locatorObject.getProperty (locatorProperty);
+
+            if (expected.isVoid())
+                return true;
+
+            return matchesString (actual, expected.toString(), exact);
+        }
+
+        static bool matchesOptionalBool (juce::DynamicObject& node,
+                                         juce::DynamicObject& locatorObject,
+                                         const juce::Identifier& nodeProperty,
+                                         const juce::Identifier& locatorProperty)
+        {
+            auto expected = locatorObject.getProperty (locatorProperty);
+
+            if (expected.isVoid())
+                return true;
+
+            return (bool) node.getProperty (nodeProperty) == (bool) expected;
+        }
+
+        static bool matchesString (const juce::String& actual, const juce::String& expected, bool exact)
+        {
+            const auto normalizedActual = normalizeForLocator (actual);
+            const auto normalizedExpected = normalizeForLocator (expected);
+
+            return exact ? normalizedActual == normalizedExpected
+                         : normalizedActual.contains (normalizedExpected);
+        }
+
+        static juce::String normalizeForLocator (juce::String text)
+        {
+            return text.replaceCharacter ('\n', ' ')
+                       .replaceCharacter ('\t', ' ')
+                       .trim()
+                       .replace ("  ", " ")
+                       .toLowerCase();
+        }
+
+        static juce::String searchableName (juce::DynamicObject& node)
+        {
+            return node.getProperty ("title").toString().isNotEmpty()
+                       ? node.getProperty ("title").toString()
+                       : node.getProperty ("name").toString();
+        }
+
+        static juce::String searchableText (juce::DynamicObject& node)
+        {
+            return node.getProperty ("name").toString() + " "
+                   + node.getProperty ("title").toString() + " "
+                   + node.getProperty ("value").toString();
+        }
+
+        static juce::var summarizeNode (juce::DynamicObject& node)
+        {
+            return object ({ { "ref", node.getProperty ("ref") },
+                             { "name", node.getProperty ("name") },
+                             { "componentId", node.getProperty ("componentId") },
+                             { "componentName", node.getProperty ("componentName") },
+                             { "class", node.getProperty ("class") },
+                             { "role", node.getProperty ("role") },
+                             { "value", node.getProperty ("value") },
+                             { "visible", node.getProperty ("visible") },
+                             { "enabled", node.getProperty ("enabled") },
+                             { "focused", node.getProperty ("focused") },
+                             { "bounds", node.getProperty ("bounds") } });
+        }
+
+        static juce::String summarizeMatches (const juce::Array<juce::var>& matches)
+        {
+            juce::StringArray lines;
+
+            for (auto& match : matches)
+            {
+                if (auto* object = match.getDynamicObject())
+                    lines.add (object->getProperty ("ref").toString()
+                               + " " + object->getProperty ("class").toString()
+                               + " \"" + object->getProperty ("name").toString() + "\"");
+            }
+
+            return lines.joinIntoString ("; ");
+        }
+
+        static bool isError (const juce::var& value)
+        {
+            if (auto* object = value.getDynamicObject())
+                return object->getProperty ("__error").isString();
+
+            return false;
+        }
+
+        static juce::String asObjectProperty (const juce::var& value, const juce::Identifier& property)
+        {
+            if (auto* object = value.getDynamicObject())
+                return object->getProperty (property).toString();
+
+            return {};
         }
 
         juce::Component* requireTarget (juce::DynamicObject& params)
@@ -746,10 +1118,11 @@ namespace melatonin
 
             node->setProperty ("ref", ref);
             node->setProperty ("name", componentString (&component));
+            node->setProperty ("componentId", component.getComponentID());
             node->setProperty ("componentName", component.getName());
             node->setProperty ("class", type (component));
             node->setProperty ("enabled", component.isEnabled());
-            node->setProperty ("visible", component.isVisible());
+            node->setProperty ("visible", component.isShowing());
             node->setProperty ("focused", component.hasKeyboardFocus (false));
             node->setProperty ("bounds", rectangleToVar (getRootBounds (component)));
             node->setProperty ("screenBounds", rectangleToVar (component.getScreenBounds()));
@@ -877,6 +1250,7 @@ namespace melatonin
             auto* result = new juce::DynamicObject();
 
             for (auto name : { "name",
+                               "componentId",
                                "componentName",
                                "class",
                                "enabled",

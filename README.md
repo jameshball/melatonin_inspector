@@ -321,9 +321,12 @@ The endpoint advertises itself in your system temp directory and is controlled w
 
 ```sh
 melatonin-ui list
+melatonin-ui -s MyPlugin capabilities
 melatonin-ui -s MyPlugin snapshot
+melatonin-ui -s MyPlugin locator --role button --name "Apply" --format json
 melatonin-ui -s MyPlugin screenshot --target root --file /tmp/my-plugin.png
 melatonin-ui -s MyPlugin click m1-4
+melatonin-ui -s MyPlugin click --component-name nav.editor
 melatonin-ui -s MyPlugin type m1-8 "hello"
 melatonin-ui -s MyPlugin set-bounds m1-12 --x 20 --y 40 --w 200 --h 48
 ```
