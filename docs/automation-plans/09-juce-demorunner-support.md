@@ -53,8 +53,10 @@ Documentation should include:
 
 ```sh
 melatonin-ui -s juce_demorunner snapshot
-melatonin-ui -s juce_demorunner screenshot --target root --file /tmp/demorunner.png
+melatonin-ui -s juce_demorunner screenshot --target root --file startup.png
 ```
+
+File outputs must stay inside the artifact root reported by `capabilities`.
 
 ## MCP Changes
 
@@ -71,8 +73,9 @@ suite validates.
 Use a generated patched wrapper:
 
 1. Locate fetched JUCE source.
-2. Copy DemoRunner source files into the build directory.
-3. Apply a deterministic patch to copied `Source/Main.cpp`.
+2. Generate a patched `Source/Main.cpp` into the build directory.
+3. Reuse DemoRunner source files from the fetched JUCE tree without editing
+   them in place.
 4. Add `#include <melatonin_inspector/melatonin_inspector.h>`.
 5. Add an Inspector member to the application or main window.
 6. After `MainComponent` is installed as content, create the Inspector against
@@ -107,7 +110,7 @@ Early smoke scenario:
 - Launch and wait for `juce_demorunner`.
 - Capture startup snapshot.
 - Capture root screenshot.
-- Run one MCP snapshot call.
+- Run one native MCP snapshot call through `melatonin-ui mcp`.
 - Quit cleanly.
 
 Full deterministic allowlist:

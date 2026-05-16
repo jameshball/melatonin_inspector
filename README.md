@@ -359,6 +359,28 @@ MELATONIN_AUTOMATION_BUILD_DIR=/tmp/melatonin-inspector-fixture \
 
 On macOS, run `/tmp/melatonin-inspector-fixture/automation_fixture_artefacts/automation_fixture.app/Contents/MacOS/automation_fixture` instead. The self-test expects the CLI at `/tmp/melatonin-inspector-fixture/melatonin-ui_artefacts/melatonin-ui`; you can override that with `MELATONIN_UI`.
 
+### JUCE DemoRunner automation target
+
+For broader real-world coverage, the top-level CMake project can also build a generated, instrumented JUCE DemoRunner. This leaves the fetched JUCE source untouched and fails CMake configuration if the DemoRunner patch anchors move.
+
+```sh
+cmake -S . -B /tmp/melatonin-inspector-demorunner \
+  -DMELATONIN_INSPECTOR_BUILD_DEMORUNNER_AUTOMATION=ON \
+  -DMELATONIN_INSPECTOR_BUILD_CLI=ON \
+  -DMELATONIN_INSPECTOR_ENABLE_AUTOMATION=ON
+cmake --build /tmp/melatonin-inspector-demorunner --target melatonin-demorunner melatonin-ui --parallel 4
+```
+
+The generated app advertises as `juce_demorunner`:
+
+```sh
+melatonin-ui -s juce_demorunner capabilities
+melatonin-ui -s juce_demorunner snapshot --format json --depth 3
+melatonin-ui -s juce_demorunner screenshot --target root --file startup.png --no-base64
+```
+
+File outputs are constrained to the session artifact root reported by `capabilities`.
+
 ## FAQ
 
 ### Can I use this in a GUI app/standalone?

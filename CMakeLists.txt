@@ -12,6 +12,7 @@ if (MelatoninInspector_IS_TOP_LEVEL)
     option(JUCE7 "Run tests on JUCE 7" OFF)
     option(MELATONIN_INSPECTOR_ENABLE_AUTOMATION "Enable the optional melatonin_inspector automation endpoint in the test app" OFF)
     option(MELATONIN_INSPECTOR_BUILD_CLI "Build the melatonin-ui automation CLI" ON)
+    option(MELATONIN_INSPECTOR_BUILD_DEMORUNNER_AUTOMATION "Build a patched JUCE DemoRunner with melatonin_inspector automation enabled" OFF)
 
     message(STATUS "Cloning JUCE...")
     if (JUCE7)
@@ -85,6 +86,102 @@ if (MelatoninInspector_IS_TOP_LEVEL)
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags)
+
+    if (MELATONIN_INSPECTOR_BUILD_DEMORUNNER_AUTOMATION)
+        set(MELATONIN_DEMORUNNER_SOURCE_DIR "${JUCE_SOURCE_DIR}/examples/DemoRunner")
+        set(MELATONIN_DEMORUNNER_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/melatonin_demorunner")
+        file(MAKE_DIRECTORY "${MELATONIN_DEMORUNNER_GENERATED_DIR}/Source")
+
+        file(READ "${MELATONIN_DEMORUNNER_SOURCE_DIR}/Source/Main.cpp" MELATONIN_DEMORUNNER_MAIN)
+        string(REPLACE
+            "#include <JuceHeader.h>"
+            "#include <JuceHeader.h>\n#include <melatonin_inspector/melatonin_inspector.h>"
+            MELATONIN_DEMORUNNER_MAIN
+            "${MELATONIN_DEMORUNNER_MAIN}")
+        string(REPLACE
+            "setContentOwned (new MainComponent(), false);"
+            "auto* mainComponent = new MainComponent();\n            setContentOwned (mainComponent, false);\n\n           #if MELATONIN_INSPECTOR_ENABLE_AUTOMATION\n            melatonin::AutomationOptions automationOptions;\n            automationOptions.sessionName = \"juce_demorunner\";\n            automationOptions.allowFileWrite = true;\n            automationOptions.artifactRoot = File::getSpecialLocation (File::tempDirectory);\n            automationInspector = std::make_unique<melatonin::Inspector> (*mainComponent);\n            automationInspector->enableAutomation (automationOptions);\n           #endif"
+            MELATONIN_DEMORUNNER_MAIN
+            "${MELATONIN_DEMORUNNER_MAIN}")
+        string(REPLACE
+            "    private:\n       #if JUCE_MAC || JUCE_WINDOWS || JUCE_LINUX || JUCE_BSD"
+            "    private:\n        std::unique_ptr<melatonin::Inspector> automationInspector;\n\n       #if JUCE_MAC || JUCE_WINDOWS || JUCE_LINUX || JUCE_BSD"
+            MELATONIN_DEMORUNNER_MAIN
+            "${MELATONIN_DEMORUNNER_MAIN}")
+        string(FIND "${MELATONIN_DEMORUNNER_MAIN}" "automationOptions.sessionName = \"juce_demorunner\"" MELATONIN_DEMORUNNER_SESSION_PATCH)
+        string(FIND "${MELATONIN_DEMORUNNER_MAIN}" "std::unique_ptr<melatonin::Inspector> automationInspector" MELATONIN_DEMORUNNER_MEMBER_PATCH)
+        if (MELATONIN_DEMORUNNER_SESSION_PATCH EQUAL -1 OR MELATONIN_DEMORUNNER_MEMBER_PATCH EQUAL -1)
+            message(FATAL_ERROR "JUCE DemoRunner automation patch failed: Source/Main.cpp patch anchors changed")
+        endif ()
+        file(WRITE "${MELATONIN_DEMORUNNER_GENERATED_DIR}/Source/Main.cpp" "${MELATONIN_DEMORUNNER_MAIN}")
+
+        juce_add_gui_app(melatonin-demorunner
+            BUNDLE_ID                       com.melatonin.inspector.demorunner
+            ICON_BIG                        "${MELATONIN_DEMORUNNER_SOURCE_DIR}/Source/JUCEAppIcon.png"
+            ICON_COMPOSER_BUNDLE            "${MELATONIN_DEMORUNNER_SOURCE_DIR}/Source/AppIcon.icon"
+            NEEDS_CURL                      TRUE
+            NEEDS_WEB_BROWSER               TRUE
+            MICROPHONE_PERMISSION_ENABLED   TRUE
+            CAMERA_PERMISSION_ENABLED       TRUE
+            BLUETOOTH_PERMISSION_ENABLED    TRUE
+            FILE_SHARING_ENABLED            TRUE
+            DOCUMENT_BROWSER_ENABLED        TRUE
+            REQUIRES_FULL_SCREEN            FALSE)
+
+        juce_generate_juce_header(melatonin-demorunner)
+
+        target_sources(melatonin-demorunner PRIVATE
+            "${MELATONIN_DEMORUNNER_SOURCE_DIR}/Source/Demos/DemoPIPs1.cpp"
+            "${MELATONIN_DEMORUNNER_SOURCE_DIR}/Source/Demos/DemoPIPs2.cpp"
+            "${MELATONIN_DEMORUNNER_SOURCE_DIR}/Source/Demos/JUCEDemos.cpp"
+            "${MELATONIN_DEMORUNNER_GENERATED_DIR}/Source/Main.cpp"
+            "${MELATONIN_DEMORUNNER_SOURCE_DIR}/Source/UI/DemoContentComponent.cpp"
+            "${MELATONIN_DEMORUNNER_SOURCE_DIR}/Source/UI/MainComponent.cpp")
+
+        target_include_directories(melatonin-demorunner PRIVATE
+            "${MELATONIN_DEMORUNNER_SOURCE_DIR}/Source")
+
+        target_compile_definitions(melatonin-demorunner PRIVATE
+            MELATONIN_INSPECTOR_ENABLE_AUTOMATION=1
+            PIP_JUCE_EXAMPLES_DIRECTORY_STRING="${JUCE_SOURCE_DIR}/examples"
+            JUCE_ASIO=1
+            JUCE_ALLOW_STATIC_NULL_VARIABLES=0
+            JUCE_CONTENT_SHARING=1
+            JUCE_DEMO_RUNNER=1
+            JUCE_PLUGINHOST_AU=1
+            JUCE_PLUGINHOST_LV2=1
+            JUCE_PLUGINHOST_VST3=1
+            JUCE_PUSH_NOTIFICATIONS=1
+            JUCE_STRICT_REFCOUNTEDPOINTER=1
+            JUCE_UNIT_TESTS=1
+            JUCE_USE_CAMERA=1
+            JUCE_USE_CURL=1
+            JUCE_USE_MP3AUDIOFORMAT=1
+            JUCE_WEB_BROWSER=1
+            JUCE_SILENCE_XCODE_15_LINKER_WARNING=1)
+
+        target_link_libraries(melatonin-demorunner PRIVATE
+            melatonin_inspector
+            juce::juce_analytics
+            juce::juce_animation
+            juce::juce_audio_utils
+            juce::juce_box2d
+            juce::juce_build_tools
+            juce::juce_dsp
+            juce::juce_javascript
+            juce::juce_midi_ci
+            juce::juce_opengl
+            juce::juce_osc
+            juce::juce_product_unlocking
+            juce::juce_video
+            juce::juce_recommended_config_flags
+            juce::juce_recommended_lto_flags
+            juce::juce_recommended_warning_flags)
+
+        foreach(folder IN ITEMS ../Assets ../Audio ../DSP ../GUI ../Utilities)
+            juce_add_bundle_resources_directory(melatonin-demorunner "${MELATONIN_DEMORUNNER_SOURCE_DIR}/${folder}")
+        endforeach()
+    endif ()
 endif ()
 
 # Assets are precompiled in the module to make it Projucer friendly
