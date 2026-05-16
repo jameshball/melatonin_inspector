@@ -330,7 +330,13 @@ melatonin-ui -s MyPlugin set-bounds m1-12 --x 20 --y 40 --w 200 --h 48
 
 Refs are scoped to the latest snapshot generation, so take a fresh snapshot before issuing actions and use the refs from that snapshot.
 
-There is also an npm-free MCP adapter at `tools/melatonin_mcp.js`. Configure an MCP client to launch it with Node, then use the `juce_snapshot`, `juce_screenshot`, `juce_click`, `juce_type`, and related tools against the same running automation session.
+The same executable can also run as a native MCP stdio server, so no Node or JavaScript runtime is required:
+
+```sh
+melatonin-ui mcp
+```
+
+Configure an MCP client to launch `melatonin-ui mcp`, then use the `juce_snapshot`, `juce_screenshot`, `juce_click`, `juce_type`, and related tools against the same running automation session.
 
 ### Automation end-to-end test
 

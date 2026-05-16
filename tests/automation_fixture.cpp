@@ -110,6 +110,15 @@ namespace
         return result;
     }
 
+    juce::String shellQuote (juce::String value)
+    {
+    #if JUCE_WINDOWS
+        return "\"" + value.replace ("\"", "\\\"") + "\"";
+    #else
+        return "'" + value.replace ("'", "'\"'\"'") + "'";
+    #endif
+    }
+
     juce::DynamicObject& asObject (const juce::var& value, const juce::String& context)
     {
         auto* object = value.getDynamicObject();
@@ -241,7 +250,7 @@ namespace
             try
             {
                 runChecks();
-                std::cout << "ok - CLI automation e2e passed\n";
+                std::cout << "ok - CLI/MCP automation e2e passed\n";
                 std::cout << "root screenshot: " << rootScreenshot.getFullPathName() << "\n";
                 finish (0);
             }
@@ -276,6 +285,8 @@ namespace
 
             auto listOutput = runCli ({ "list" });
             require (listOutput.contains (juce::String (sessionName) + " "), "CLI list did not show the automation_fixture process");
+
+            runMcpSmokeCheck();
 
             auto snapshot = readSnapshot();
             require (!findByComponentName (snapshot, "fixture.tabs").isVoid(), "snapshot is missing top-level tabs");
@@ -371,9 +382,16 @@ namespace
             command.add (cliPath.getFullPathName());
             command.addArray (args);
 
+            return runProcess (command, "melatonin-ui " + args.joinIntoString (" "));
+        }
+
+        juce::String runProcess (const juce::StringArray& command, const juce::String& label)
+        {
+            auto displayCommand = command.joinIntoString (" ");
+
             juce::ChildProcess process;
             require (process.start (command, juce::ChildProcess::wantStdOut | juce::ChildProcess::wantStdErr),
-                     "Could not start " + command.joinIntoString (" "));
+                     "Could not start " + displayCommand);
 
             juce::String output;
             auto deadline = juce::Time::currentTimeMillis() + 10000;
@@ -387,7 +405,7 @@ namespace
                 if (juce::Time::currentTimeMillis() > deadline || threadShouldExit())
                 {
                     process.kill();
-                    throw std::runtime_error (("Timed out running " + command.joinIntoString (" ") + "\n" + output).toStdString());
+                    throw std::runtime_error (("Timed out running " + label + "\n" + output).toStdString());
                 }
 
                 juce::Thread::sleep (10);
@@ -404,9 +422,97 @@ namespace
             }
 
             require (process.getExitCode() == 0,
-                     "melatonin-ui " + args.joinIntoString (" ") + " failed with exit code " + juce::String ((int) process.getExitCode()) + "\n" + output);
+                     label + " failed with exit code " + juce::String ((int) process.getExitCode()) + "\n" + output);
 
             return output;
+        }
+
+        juce::String runMcpBatch (std::initializer_list<juce::String> requests)
+        {
+            auto requestFile = tempDirectory().getNonexistentChildFile ("melatonin-mcp-requests", ".jsonl");
+            juce::String requestText;
+
+            for (const auto& request : requests)
+                requestText << request << "\n";
+
+            require (requestFile.replaceWithText (requestText), "Could not write MCP request file: " + requestFile.getFullPathName());
+
+            juce::StringArray command;
+
+        #if JUCE_WINDOWS
+            command.add ("cmd");
+            command.add ("/C");
+            command.add ("type " + shellQuote (requestFile.getFullPathName()) + " | " + shellQuote (cliPath.getFullPathName()) + " mcp");
+        #else
+            command.add ("/bin/sh");
+            command.add ("-c");
+            command.add ("cat " + shellQuote (requestFile.getFullPathName()) + " | " + shellQuote (cliPath.getFullPathName()) + " mcp");
+        #endif
+
+            auto output = runProcess (command, "melatonin-ui mcp");
+            requestFile.deleteFile();
+            return output;
+        }
+
+        juce::var parseMcpLine (const juce::StringArray& lines, int index)
+        {
+            require (juce::isPositiveAndBelow (index, lines.size()), "MCP response " + juce::String (index) + " was not written");
+
+            auto parsed = juce::JSON::parse (lines[index]);
+            asObject (parsed, "MCP response " + juce::String (index));
+            return parsed;
+        }
+
+        juce::var assertMcpResult (const juce::var& response, int expectedId)
+        {
+            auto& responseObject = asObject (response, "MCP response");
+            require ((int) responseObject.getProperty ("id") == expectedId,
+                     "MCP response id mismatch: expected " + juce::String (expectedId)
+                         + ", got " + responseObject.getProperty ("id").toString());
+            require (responseObject.getProperty ("error").isVoid(), "MCP response returned an error: " + juce::JSON::toString (response, true));
+
+            auto result = responseObject.getProperty ("result");
+            asObject (result, "MCP result");
+            return result;
+        }
+
+        void runMcpSmokeCheck()
+        {
+            auto output = runMcpBatch ({
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}})",
+                R"({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})",
+                R"({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"juce_snapshot","arguments":{"session":"automation_fixture","format":"text","depth":12}}})"
+            });
+
+            auto lines = juce::StringArray::fromLines (output);
+            require (lines.size() >= 3, "MCP smoke expected at least 3 response lines, got " + juce::String (lines.size()) + "\n" + output);
+
+            auto initializeResult = assertMcpResult (parseMcpLine (lines, 0), 1);
+            auto& initialize = asObject (initializeResult, "MCP initialize result");
+            auto serverInfoValue = initialize.getProperty ("serverInfo");
+            auto& serverInfo = asObject (serverInfoValue, "MCP serverInfo");
+            require (serverInfo.getProperty ("name").toString() == "melatonin-mcp", "MCP initialize returned the wrong server name");
+
+            auto toolsListResult = assertMcpResult (parseMcpLine (lines, 1), 2);
+            auto& toolsList = asObject (toolsListResult, "MCP tools/list result");
+            auto tools = toolsList.getProperty ("tools");
+            require (tools.isArray(), "MCP tools/list did not return a tools array");
+
+            bool foundSnapshotTool = false;
+
+            for (const auto& toolInfo : *tools.getArray())
+                if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_snapshot")
+                    foundSnapshotTool = true;
+
+            require (foundSnapshotTool, "MCP tools/list did not expose juce_snapshot");
+
+            auto snapshotCallResult = assertMcpResult (parseMcpLine (lines, 2), 3);
+            auto& snapshotCall = asObject (snapshotCallResult, "MCP snapshot result");
+            auto content = snapshotCall.getProperty ("content");
+            require (content.isArray() && !content.getArray()->isEmpty(), "MCP snapshot did not return content");
+
+            auto text = asObject (content.getArray()->getReference (0), "MCP snapshot content").getProperty ("text").toString();
+            require (text.contains ("fixture.tabs"), "MCP snapshot content did not include the fixture tree");
         }
 
         juce::var readSnapshot()

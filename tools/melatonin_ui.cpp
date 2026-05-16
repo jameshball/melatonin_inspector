@@ -200,6 +200,282 @@ namespace
         return result;
     }
 
+    juce::var emptyObject()
+    {
+        return juce::var (new juce::DynamicObject());
+    }
+
+    juce::var array (std::initializer_list<juce::var> values)
+    {
+        juce::Array<juce::var> result;
+
+        for (const auto& value : values)
+            result.add (value);
+
+        return result;
+    }
+
+    juce::var stringSchema()
+    {
+        return object ({ { "type", "string" } });
+    }
+
+    juce::var numberSchema()
+    {
+        return object ({ { "type", "number" } });
+    }
+
+    juce::var toolSchema (std::initializer_list<std::pair<juce::String, juce::var>> properties,
+                          std::initializer_list<juce::var> required = {})
+    {
+        auto schema = object ({ { "type", "object" }, { "properties", object (properties) } });
+
+        if (required.size() > 0)
+            schema.getDynamicObject()->setProperty ("required", array (required));
+
+        return schema;
+    }
+
+    juce::var tool (const juce::String& name, const juce::String& description, const juce::var& inputSchema)
+    {
+        return object ({ { "name", name }, { "description", description }, { "inputSchema", inputSchema } });
+    }
+
+    juce::var mcpTools()
+    {
+        return array ({
+            tool ("juce_list_sessions",
+                  "List running melatonin_inspector automation sessions.",
+                  toolSchema ({})),
+            tool ("juce_snapshot",
+                  "Return a compact Playwright-style snapshot of a JUCE component tree.",
+                  toolSchema ({ { "session", stringSchema() },
+                                { "format", object ({ { "type", "string" },
+                                                       { "enum", array ({ "text", "json" }) },
+                                                       { "default", "text" } }) },
+                                { "depth", object ({ { "type", "number" }, { "default", 8 } }) } })),
+            tool ("juce_screenshot",
+                  "Capture a PNG screenshot of the root or a component ref.",
+                  toolSchema ({ { "session", stringSchema() },
+                                { "target", object ({ { "type", "string" }, { "default", "root" } }) },
+                                { "ref", stringSchema() },
+                                { "file", stringSchema() } })),
+            tool ("juce_click",
+                  "Click a component ref and return a fresh snapshot.",
+                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() } }, { "ref" })),
+            tool ("juce_click_xy",
+                  "Click root-local coordinates and return a fresh snapshot.",
+                  toolSchema ({ { "session", stringSchema() }, { "x", numberSchema() }, { "y", numberSchema() } }, { "x", "y" })),
+            tool ("juce_type",
+                  "Type text into a component ref and return a fresh snapshot.",
+                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "text", stringSchema() } }, { "ref", "text" })),
+            tool ("juce_press",
+                  "Press a key and return a fresh snapshot.",
+                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "key", stringSchema() } }, { "key" })),
+            tool ("juce_drag",
+                  "Drag a component by a delta and return a fresh snapshot.",
+                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "dx", numberSchema() }, { "dy", numberSchema() } }, { "ref" })),
+            tool ("juce_set_bounds",
+                  "Set a component's bounds and return a fresh snapshot.",
+                  toolSchema ({ { "session", stringSchema() },
+                                { "ref", stringSchema() },
+                                { "x", numberSchema() },
+                                { "y", numberSchema() },
+                                { "w", numberSchema() },
+                                { "h", numberSchema() } },
+                              { "ref" })),
+            tool ("juce_set_property",
+                  "Set a component property and return a fresh snapshot.",
+                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "name", stringSchema() }, { "value", emptyObject() } },
+                              { "ref", "name" })),
+            tool ("juce_wait",
+                  "Wait briefly and return a fresh snapshot.",
+                  toolSchema ({ { "session", stringSchema() }, { "ms", object ({ { "type", "number" }, { "default", 250 } }) } }))
+        });
+    }
+
+    juce::String methodForTool (const juce::String& name)
+    {
+        if (name == "juce_snapshot") return "snapshot";
+        if (name == "juce_screenshot") return "screenshot";
+        if (name == "juce_click") return "click";
+        if (name == "juce_click_xy") return "click_xy";
+        if (name == "juce_type") return "type";
+        if (name == "juce_press") return "press";
+        if (name == "juce_drag") return "drag";
+        if (name == "juce_set_bounds") return "set_bounds";
+        if (name == "juce_set_property") return "set_property";
+        if (name == "juce_wait") return "wait";
+
+        return {};
+    }
+
+    juce::var mcpTextContent (const juce::String& text)
+    {
+        return object ({ { "content", array ({ object ({ { "type", "text" }, { "text", text } }) }) } });
+    }
+
+    juce::var callMcpTool (const juce::String& name, juce::var arguments)
+    {
+        if (!arguments.isObject())
+            arguments = emptyObject();
+
+        auto* args = arguments.getDynamicObject();
+
+        if (name == "juce_list_sessions")
+        {
+            juce::Array<juce::var> publicSessions;
+
+            for (const auto& session : loadSessions())
+            {
+                if (auto* sessionObject = session.getDynamicObject())
+                {
+                    publicSessions.add (object ({ { "pid", sessionObject->getProperty ("pid") },
+                                                  { "session", sessionObject->getProperty ("session") },
+                                                  { "root", sessionObject->getProperty ("root") },
+                                                  { "host", sessionObject->getProperty ("host") },
+                                                  { "port", sessionObject->getProperty ("port") },
+                                                  { "file", sessionObject->getProperty ("file") },
+                                                  { "modifiedAtMs", sessionObject->getProperty ("modifiedAtMs") } }));
+                }
+            }
+
+            return mcpTextContent (juce::JSON::toString (juce::var (publicSessions), true));
+        }
+
+        const auto sessionName = args->getProperty ("session").toString();
+        auto session = findSession (sessionName);
+        auto* sessionObject = session.getDynamicObject();
+
+        if (sessionObject == nullptr)
+            throw std::runtime_error (("No melatonin_inspector automation session found"
+                                       + (sessionName.isNotEmpty() ? " for '" + sessionName + "'" : juce::String()))
+                                          .toStdString());
+
+        const auto method = methodForTool (name);
+
+        if (method.isEmpty())
+            throw std::runtime_error (("Unknown melatonin MCP tool: " + name).toStdString());
+
+        auto result = request (*sessionObject, method, arguments);
+
+        if (name == "juce_screenshot")
+        {
+            juce::Array<juce::var> content;
+            auto* resultObject = result.getDynamicObject();
+
+            if (resultObject != nullptr)
+            {
+                auto file = resultObject->getProperty ("file").toString();
+                auto base64 = resultObject->getProperty ("base64").toString();
+                auto mimeType = resultObject->getProperty ("mimeType").toString();
+
+                if (file.isNotEmpty())
+                    content.add (object ({ { "type", "text" }, { "text", file } }));
+
+                if (base64.isNotEmpty())
+                    content.add (object ({ { "type", "image" },
+                                           { "data", base64 },
+                                           { "mimeType", mimeType.isNotEmpty() ? mimeType : juce::String ("image/png") } }));
+            }
+
+            return object ({ { "content", juce::var (content) } });
+        }
+
+        if (name == "juce_snapshot" && args->getProperty ("format").toString() == "json")
+            return mcpTextContent (juce::JSON::toString (result, true));
+
+        if (auto* resultObject = result.getDynamicObject())
+        {
+            auto text = resultObject->getProperty ("text").toString();
+
+            if (text.isNotEmpty())
+                return mcpTextContent (text);
+        }
+
+        return mcpTextContent (juce::JSON::toString (result, true));
+    }
+
+    juce::var jsonRpcResult (const juce::var& id, const juce::var& result)
+    {
+        return object ({ { "jsonrpc", "2.0" }, { "id", id }, { "result", result } });
+    }
+
+    juce::var jsonRpcError (const juce::var& id, int code, const juce::String& message)
+    {
+        return object ({ { "jsonrpc", "2.0" },
+                         { "id", id },
+                         { "error", object ({ { "code", code }, { "message", message } }) } });
+    }
+
+    juce::var handleMcpLine (const juce::String& line)
+    {
+        auto parsed = juce::JSON::parse (line);
+        auto* requestObject = parsed.getDynamicObject();
+
+        if (requestObject == nullptr)
+            return jsonRpcError ({}, -32700, "Parse error");
+
+        auto id = requestObject->getProperty ("id");
+        auto method = requestObject->getProperty ("method").toString();
+
+        try
+        {
+            if (method == "initialize")
+            {
+                auto params = requestObject->getProperty ("params");
+                auto* paramsObject = params.getDynamicObject();
+                auto protocolVersion = paramsObject != nullptr ? paramsObject->getProperty ("protocolVersion").toString() : juce::String();
+
+                if (protocolVersion.isEmpty())
+                    protocolVersion = "2025-11-25";
+
+                return jsonRpcResult (id,
+                                      object ({ { "protocolVersion", protocolVersion },
+                                                { "capabilities", object ({ { "tools", emptyObject() } }) },
+                                                { "serverInfo", object ({ { "name", "melatonin-mcp" }, { "version", "0.1.0" } }) } }));
+            }
+
+            if (method == "tools/list")
+                return jsonRpcResult (id, object ({ { "tools", mcpTools() } }));
+
+            if (method == "tools/call")
+            {
+                auto params = requestObject->getProperty ("params");
+                auto* paramsObject = params.getDynamicObject();
+
+                if (paramsObject == nullptr)
+                    return jsonRpcError (id, -32602, "tools/call params must be an object");
+
+                return jsonRpcResult (id,
+                                      callMcpTool (paramsObject->getProperty ("name").toString(),
+                                                   paramsObject->getProperty ("arguments")));
+            }
+
+            if (id.isVoid())
+                return {};
+
+            return jsonRpcError (id, -32601, "Method not found: " + method);
+        }
+        catch (const std::exception& e)
+        {
+            return jsonRpcError (id, -32000, e.what());
+        }
+    }
+
+    void runMcpServer()
+    {
+        std::string line;
+
+        while (std::getline (std::cin, line))
+        {
+            auto response = handleMcpLine (juce::String::fromUTF8 (line.data(), (int) line.size()));
+
+            if (!response.isVoid())
+                std::cout << juce::JSON::toString (response, true).toStdString() << "\n";
+        }
+    }
+
     void printResult (const juce::var& result, bool preferJson = false)
     {
         if (!preferJson)
@@ -232,6 +508,7 @@ namespace
         std::cout
             << "Usage:\n"
             << "  melatonin-ui list\n"
+            << "  melatonin-ui mcp\n"
             << "  melatonin-ui -s <session> snapshot [--format text|json] [--depth n]\n"
             << "  melatonin-ui -s <session> screenshot [--target root|--ref m1-1] --file /tmp/root.png\n"
             << "  melatonin-ui -s <session> click <ref>\n"
@@ -270,6 +547,12 @@ int main (int argc, char* argv[])
 
     const auto sessionName = optionValue (args, "-s");
     auto command = popFront (args);
+
+    if (command == "mcp")
+    {
+        runMcpServer();
+        return 0;
+    }
 
     if (command == "list")
     {
