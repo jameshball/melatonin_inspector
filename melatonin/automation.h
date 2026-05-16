@@ -807,7 +807,32 @@ namespace melatonin
             if (isTrial (params))
                 return actionabilityResult (*target);
 
-            activateComponent (*target);
+            const auto buttonName = getString (params, "button", "left");
+            juce::ModifierKeys buttonModifiers;
+
+            if (!parseMouseButton (buttonName, buttonModifiers))
+                return error ("invalid_button", "Unknown mouse button: " + buttonName);
+
+            const auto clickCount = getInt (params, "clickCount", 1);
+
+            if (clickCount < 1)
+                return error ("invalid_click_count", "clickCount must be at least 1.");
+
+            juce::Point<float> localPoint;
+
+            if (auto pointError = localClickPoint (*target, params, localPoint); !pointError.isVoid())
+                return pointError;
+
+            if (auto* button = dynamic_cast<juce::Button*> (target))
+            {
+                if (buttonName == "left" && clickCount == 1 && !hasClickPosition (params))
+                {
+                    button->triggerClick();
+                    return snapshotAfterAction();
+                }
+            }
+
+            synthesizeComponentClick (*target, buttonModifiers, clickCount, localPoint);
             return snapshotAfterAction();
         }
 
@@ -836,7 +861,7 @@ namespace melatonin
             }
             else
             {
-                synthesizeComponentClick (*target, juce::ModifierKeys(), 2);
+                synthesizeComponentClick (*target, juce::ModifierKeys(), 2, targetCentreLocal (*target));
             }
 
             return snapshotAfterAction();
@@ -860,7 +885,7 @@ namespace melatonin
             if (isTrial (params))
                 return actionabilityResult (*target);
 
-            synthesizeComponentClick (*target, juce::ModifierKeys (juce::ModifierKeys::rightButtonModifier), 1);
+            synthesizeComponentClick (*target, juce::ModifierKeys (juce::ModifierKeys::rightButtonModifier), 1, targetCentreLocal (*target));
             return snapshotAfterAction();
         }
 
@@ -1976,17 +2001,6 @@ namespace melatonin
             return root != nullptr ? root->getPeer() : nullptr;
         }
 
-        void activateComponent (juce::Component& target)
-        {
-            if (auto* button = dynamic_cast<juce::Button*> (&target))
-            {
-                button->triggerClick();
-                return;
-            }
-
-            synthesizeComponentClick (target, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1);
-        }
-
         juce::var validateInputTarget (juce::Component& target, juce::DynamicObject& params) const
         {
             if ((bool) params.getProperty ("force"))
@@ -2037,13 +2051,72 @@ namespace melatonin
             return found == &target || (found != nullptr && target.isParentOf (found));
         }
 
-        void synthesizeComponentClick (juce::Component& target, juce::ModifierKeys buttonModifiers, int numberOfClicks)
+        static bool parseMouseButton (const juce::String& buttonName, juce::ModifierKeys& modifiers)
+        {
+            const auto normalized = buttonName.trim().toLowerCase();
+
+            if (normalized == "left" || normalized.isEmpty())
+            {
+                modifiers = juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier);
+                return true;
+            }
+
+            if (normalized == "right")
+            {
+                modifiers = juce::ModifierKeys (juce::ModifierKeys::rightButtonModifier);
+                return true;
+            }
+
+            if (normalized == "middle")
+            {
+                modifiers = juce::ModifierKeys (juce::ModifierKeys::middleButtonModifier);
+                return true;
+            }
+
+            return false;
+        }
+
+        static bool hasClickPosition (juce::DynamicObject& params)
+        {
+            return params.getProperty ("position").isObject()
+                   || (!params.getProperty ("positionX").isVoid() && !params.getProperty ("positionY").isVoid());
+        }
+
+        juce::Point<float> targetCentreLocal (juce::Component& target) const
+        {
+            return target.getLocalPoint (root, getRootBounds (target).getCentre()).toFloat();
+        }
+
+        juce::var localClickPoint (juce::Component& target, juce::DynamicObject& params, juce::Point<float>& point) const
+        {
+            if (!hasClickPosition (params))
+            {
+                point = targetCentreLocal (target);
+                return {};
+            }
+
+            auto position = params.getProperty ("position");
+
+            if (auto* positionObject = position.getDynamicObject())
+            {
+                point = { (float) positionObject->getProperty ("x"), (float) positionObject->getProperty ("y") };
+            }
+            else
+            {
+                point = { (float) params.getProperty ("positionX"), (float) params.getProperty ("positionY") };
+            }
+
+            if (!target.getLocalBounds().contains (point.roundToInt()))
+                return error ("invalid_coordinate", "Click position is outside target bounds.");
+
+            return {};
+        }
+
+        void synthesizeComponentClick (juce::Component& target, juce::ModifierKeys buttonModifiers, int numberOfClicks, juce::Point<float> localPoint)
         {
             if (root == nullptr)
                 return;
 
-            auto rootPoint = getRootBounds (target).getCentre();
-            auto localPoint = target.getLocalPoint (root, rootPoint).toFloat();
             auto source = juce::Desktop::getInstance().getMainMouseSource();
             auto now = juce::Time::getCurrentTime();
 

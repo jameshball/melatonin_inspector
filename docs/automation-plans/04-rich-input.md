@@ -60,6 +60,14 @@ Current increment:
   `targetLocator`. The initial implementation drags from source center to target
   center, matching the common `locator.dragTo(target)` case.
 
+Next increment:
+
+- Extend `click` with optional `button`, `clickCount`, and target-local
+  `position`, while keeping `dblclick`, `right-click`, and `click-xy` as CLI
+  aliases.
+- Use direct JUCE component callbacks for locator/ref clicks so custom
+  components such as `ListBox::RowComponent` receive their own mouse path.
+
 CLI may expose `dblclick` and `right-click` aliases for ergonomics, but they
 should serialize to `click` with `clickCount` or `button`.
 
@@ -94,6 +102,8 @@ melatonin-ui -s app drag <ref> --dx 40 --dy 15 --steps 4
 melatonin-ui -s app drag-xy 20 20 200 100 --steps 8
 melatonin-ui -s app drag-to <source-ref> <target-ref> --steps 6
 melatonin-ui -s app drag-to --component-name source --target-component-name target --steps 6
+melatonin-ui -s app click --component-name canvas --position 12,24 --button right
+melatonin-ui -s app click --component-name probe --click-count 2
 ```
 
 ## MCP Changes

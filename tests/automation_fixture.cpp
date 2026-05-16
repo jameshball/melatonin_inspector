@@ -656,6 +656,18 @@ namespace
             snapshot = readSnapshot();
             assertStatus (snapshot, "Status: RightClick");
 
+            runCli ({ "-s", sessionName, "click", "--component-id", "advanced.inputProbe", "--click-count", "2" });
+            snapshot = readSnapshot();
+            assertStatus (snapshot, "Status: DoubleClick");
+
+            runCli ({ "-s", sessionName, "click", "--component-id", "advanced.inputProbe", "--button", "right", "--position", "8,8" });
+            snapshot = readSnapshot();
+            assertStatus (snapshot, "Status: RightClick");
+
+            auto invalidClickPosition = runCliExpectFailure ({ "-s", sessionName, "click", "--component-id", "advanced.inputProbe", "--position", "999,999" });
+            require (invalidClickPosition.contains ("invalid_coordinate") || invalidClickPosition.contains ("outside target bounds"),
+                     "click with an out-of-bounds target-local position should fail\n" + invalidClickPosition);
+
             runCli ({ "-s", sessionName, "press", "Control+K", "--component-id", "advanced.inputProbe" });
             snapshot = readSnapshot();
             assertStatus (snapshot, "Status: Key Ctrl+K");

@@ -442,7 +442,13 @@ namespace
                                 { "includeBase64", booleanSchema() } })),
             tool ("juce_click",
                   "Click a component ref and return a fresh snapshot.",
-                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() } })),
+                  toolSchema ({ { "session", stringSchema() },
+                                { "ref", stringSchema() },
+                                { "locator", locatorSchema() },
+                                { "button", stringSchema() },
+                                { "clickCount", numberSchema() },
+                                { "position", object ({ { "type", "object" },
+                                                        { "properties", object ({ { "x", numberSchema() }, { "y", numberSchema() } }) } }) } })),
             tool ("juce_dblclick",
                   "Double-click a component ref or locator and return a fresh snapshot.",
                   toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() } })),
@@ -805,7 +811,7 @@ namespace
             << "  melatonin-ui -s <session> locator [--role role] [--name text] [--text text] [--format json]\n"
             << "  melatonin-ui -s <session> snapshot [--format text|json] [--depth n]\n"
             << "  melatonin-ui -s <session> screenshot [--target root|--ref m1-1] --file /tmp/root.png\n"
-            << "  melatonin-ui -s <session> click <ref>\n"
+            << "  melatonin-ui -s <session> click <ref> [--button left|right|middle] [--click-count n] [--position x,y]\n"
             << "  melatonin-ui -s <session> dblclick <ref>\n"
             << "  melatonin-ui -s <session> right-click <ref>\n"
             << "  melatonin-ui -s <session> click-xy <x> <y>\n"
@@ -973,10 +979,33 @@ int main (int argc, char* argv[])
 
         if (command == "click" || command == "dblclick" || command == "right-click")
         {
+            auto button = optionValue (args, "--button");
+            auto clickCount = optionValue (args, "--click-count");
+            auto position = optionValue (args, "--position");
             juce::DynamicObject tempParams;
             addActionOptions (args, tempParams);
             auto locator = parseLocatorOptions (args);
             auto params = object ({ { "ref", args.size() >= 1 ? args[0] : juce::String() } });
+
+            if (button.isNotEmpty())
+                params.getDynamicObject()->setProperty ("button", button);
+
+            if (clickCount.isNotEmpty())
+                params.getDynamicObject()->setProperty ("clickCount", clickCount.getIntValue());
+
+            if (position.isNotEmpty())
+            {
+                juce::StringArray coordinates;
+                coordinates.addTokens (position, ",", {});
+                coordinates.trim();
+
+                if (coordinates.size() != 2)
+                    throw std::runtime_error ("--position must use x,y");
+
+                params.getDynamicObject()->setProperty ("position", object ({ { "x", coordinates[0].getDoubleValue() },
+                                                                              { "y", coordinates[1].getDoubleValue() } }));
+            }
+
             params.getDynamicObject()->setProperty ("timeoutMs", tempParams.getProperty ("timeoutMs"));
             params.getDynamicObject()->setProperty ("force", tempParams.getProperty ("force"));
             params.getDynamicObject()->setProperty ("trial", tempParams.getProperty ("trial"));
