@@ -17,10 +17,14 @@ Model the surface after:
 
 ## JUCE-Specific Differences
 
-- JUCE screenshots use `Component::createComponentSnapshot()`.
+- JUCE component/ref screenshots use `Component::createComponentSnapshot()`.
+- Screenshots should default to `source=component` for deterministic behavior.
+- `source=native` uses JUCE's native-window capture where available.
 - Component snapshots can include hidden or offscreen behavior that differs from
   OS-level screenshots. Document this clearly.
-- Root/window screenshots are component snapshots, not desktop captures.
+- Native-window screenshots are required for heavyweight content such as
+  OpenGL-backed DemoRunner demos, where component repaint snapshots can miss
+  GPU-rendered pixels.
 - File output is useful for CLI and CI, while MCP should return image content.
 
 ## Public Protocol Changes
@@ -33,6 +37,7 @@ Extend `screenshot`:
   "ref": "m1-4",
   "locator": { "role": "button", "name": "Save" },
   "window": { "index": 0 },
+  "source": "component",
   "clip": { "x": 0, "y": 0, "w": 320, "h": 200 },
   "scale": 1.0,
   "includeBase64": false,
@@ -60,6 +65,11 @@ Response policy:
 - MCP returns image content because that is the point of the tool.
 - Endpoint-side file writes require `allowFileWrite=true` and must stay under
   the configured artifact root.
+- `source` accepts `component`, `native`, or `auto`. `component` is deterministic
+  JUCE repaint capture. `native` captures pixels from the native window and
+  crops back to the target, which is the path used for OpenGL visual evidence.
+  `auto` may try native capture for root screenshots and fall back to component
+  snapshots, but the CLI and MCP defaults stay `component`.
 
 ## CLI Changes
 
@@ -70,6 +80,7 @@ melatonin-ui -s app screenshot --target root --file /tmp/root.png
 melatonin-ui -s app screenshot --component-name nav.editor --file /tmp/button.png
 melatonin-ui -s app screenshot --role button --name Save --file /tmp/save.png
 melatonin-ui -s app screenshot --target root --clip 0,0,320,200 --file /tmp/clip.png
+melatonin-ui -s app screenshot --target root --source native --file /tmp/opengl.png
 melatonin-ui -s app screenshot --window 0 --file /tmp/window.png
 ```
 
@@ -82,6 +93,7 @@ Extend `juce_screenshot`:
 
 - accept locator arguments.
 - accept clip and scale.
+- accept `source=auto|component|native`.
 - return MCP image content.
 - include optional text content with file path and dimensions.
 
@@ -92,6 +104,7 @@ Add helpers:
 - resolve screenshot target.
 - validate clip rect.
 - convert root-local clip to component-local clip.
+- crop native-window captures back to the requested root/ref/locator bounds.
 - encode PNG.
 - write optional file.
 - return image metadata.
@@ -103,6 +116,8 @@ Rules:
 - Ref screenshot rejects stale refs.
 - Clip must intersect the target bounds.
 - Scale must be greater than zero and bounded to a safe maximum.
+- `source=native` fails explicitly if the platform/native handle cannot provide
+  a snapshot. `source=auto` may fall back to component snapshots.
 
 ## Fixture Additions
 
@@ -121,6 +136,8 @@ Add components with:
 - Code tab screenshot.
 - Settings viewport screenshot.
 - AccessibilityDemo selected control screenshot.
+- OpenGLDemo native root/clip screenshot that proves GPU-rendered pixels are not
+  blank under the supported CI windowing setup.
 
 ## Test Matrix
 
@@ -134,6 +151,7 @@ C++ fixture self-test:
 - stale ref screenshot failure.
 - file output.
 - base64 output decodes to PNG signature.
+- native-source root screenshot produces a valid PNG.
 - file output denied when `allowFileWrite=false`.
 - path traversal outside artifact root is denied.
 
@@ -156,6 +174,7 @@ MCP coverage:
 - `file_write_failed`
 - `file_write_disabled`
 - `artifact_path_denied`
+- `invalid_screenshot_source`
 
 ## Acceptance Criteria
 
@@ -164,6 +183,8 @@ MCP coverage:
 - CLI file output remains simple.
 - Locator screenshots use the same locator strictness as actions.
 - Base64 is opt-in outside MCP to avoid bloated CLI/protocol responses.
+- OpenGL-heavy DemoRunner screenshot evidence uses `source=native` and is
+  checked for pixel variation rather than only PNG validity.
 
 ## Evidence Artifacts
 

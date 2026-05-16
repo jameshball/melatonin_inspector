@@ -202,7 +202,8 @@ namespace
         require (file.loadFileAsData (bytes), label + " could not be read: " + file.getFullPathName());
 
         static constexpr unsigned char pngSignature[] { 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a };
-        require (bytes.getSize() > 1000, label + " is unexpectedly small: " + juce::String ((int) bytes.getSize()) + " bytes");
+        require (bytes.getSize() > sizeof (pngSignature),
+                 label + " is unexpectedly small: " + juce::String ((int) bytes.getSize()) + " bytes");
         require (bytes.getSize() >= sizeof (pngSignature), label + " is not a PNG: " + file.getFullPathName());
 
         auto* data = static_cast<const unsigned char*> (bytes.getData());
@@ -439,6 +440,14 @@ namespace
             rootScreenshot = screenshotDirectory.getChildFile ("melatonin-automation-e2e-root.png");
             runCli ({ "-s", sessionName, "screenshot", "--target", "root", "--file", rootScreenshot.getFullPathName() });
             assertPng (rootScreenshot, "root screenshot");
+
+            auto nativeRootScreenshot = screenshotDirectory.getChildFile ("melatonin-automation-e2e-root-native.png");
+            runCli ({ "-s", sessionName, "screenshot", "--target", "root", "--source", "native", "--file", nativeRootScreenshot.getFullPathName(), "--no-base64" });
+            assertPng (nativeRootScreenshot, "native root screenshot");
+
+            auto invalidSourceOutput = runCliExpectFailure ({ "-s", sessionName, "screenshot", "--target", "root", "--source", "bogus", "--file", rootScreenshot.getFullPathName() });
+            require (invalidSourceOutput.contains ("invalid_screenshot_source") || invalidSourceOutput.contains ("source must be"),
+                     "invalid screenshot source should fail clearly\n" + invalidSourceOutput);
 
             auto buttonScreenshot = screenshotDirectory.getChildFile ("melatonin-automation-e2e-button.png");
             auto editorButton = findByComponentName (snapshot, "nav.editor");

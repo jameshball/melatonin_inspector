@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <iostream>
+#include <set>
 #include <stdexcept>
 
 #ifndef MELATONIN_DEMORUNNER_EXECUTABLE
@@ -127,6 +128,8 @@ namespace
             captureScreenshot ("flexbox-demo.png");
             exerciseFlexBoxDemo();
 
+            exerciseAdditionalDemoCoverage();
+
             selectTopLevelTab ("Settings");
             runCli ({ "-s", sessionName, "wait-for-text", "LookAndFeel:", "--timeout-ms", "3000" });
             captureScreenshot ("settings.png");
@@ -139,7 +142,7 @@ namespace
 
             auto traceStop = juce::JSON::parse (runCli ({ "-s", sessionName, "trace-stop" }));
             auto& traceStopObject = asObject (traceStop, "trace-stop");
-            require ((int) traceStopObject.getProperty ("events") >= 20, "DemoRunner trace did not record enough events");
+            require ((int) traceStopObject.getProperty ("events") >= 60, "DemoRunner trace did not record enough events");
             copyEvidenceFile (traceStopObject.getProperty ("trace").toString(), "demorunner-trace.json");
         }
 
@@ -148,6 +151,7 @@ namespace
         juce::File cliPath;
         juce::File evidenceDirectory;
         juce::ChildProcess demoRunner;
+        juce::StringArray capturedCategories;
 
         void clearEvidenceDirectory()
         {
@@ -235,6 +239,16 @@ namespace
 
             auto result = runProcess (command, "melatonin-ui " + args.joinIntoString (" "), true, 15000);
             return result.output.trim();
+        }
+
+        bool tryRunCli (std::initializer_list<juce::String> args, int timeoutMs = 3000)
+        {
+            auto argArray = makeArgs (args);
+            juce::StringArray command;
+            command.add (cliPath.getFullPathName());
+            command.addArray (argArray);
+
+            return runProcess (command, "melatonin-ui " + argArray.joinIntoString (" "), false, timeoutMs).exitCode == 0;
         }
 
         ProcessResult runProcess (const juce::StringArray& command, const juce::String& label, bool expectSuccess, int timeoutMs)
@@ -378,9 +392,116 @@ namespace
 
         void clickVisibleListItem (const juce::String& name)
         {
+            scrollListItemIntoView (name);
             runCli ({ "-s", sessionName, "wait-for-locator", "--role", "listItem", "--name", name, "--exact", "--timeout-ms", "3000" });
-            runCli ({ "-s", sessionName, "click", "--role", "listItem", "--name", name, "--exact", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "click", "--role", "listItem", "--name", name, "--exact", "--force", "--timeout-ms", "3000" });
             juce::Thread::sleep (500);
+        }
+
+        void scrollListItemIntoView (const juce::String& name)
+        {
+            for (int attempt = 0; attempt < 40; ++attempt)
+            {
+                if (tryRunCli ({ "-s", sessionName, "wait-for-locator", "--role", "listItem", "--name", name, "--exact", "--timeout-ms", "300" }, 1000))
+                    return;
+
+                runCli ({ "-s", sessionName, "wheel", "231", "300", "--dy", "-8" });
+                runCli ({ "-s", sessionName, "wait", "--ms", "100" });
+            }
+
+            require (false, "Could not scroll list item into view: " + name);
+        }
+
+        static juce::String categoryScreenshotName (const juce::String& category)
+        {
+            return category.toLowerCase().retainCharacters ("abcdefghijklmnopqrstuvwxyz0123456789") + "-category.png";
+        }
+
+        void openCategory (const juce::String& category)
+        {
+            openDemosPanel();
+
+            if (!tryRunCli ({ "-s", sessionName, "wait-for-locator", "--role", "listItem", "--name", category, "--exact", "--timeout-ms", "500" }, 1500))
+                tryRunCli ({ "-s", sessionName, "click", "--role", "button", "--name", "Previous", "--exact", "--timeout-ms", "1000" }, 3000);
+
+            runCli ({ "-s", sessionName, "wait-for-locator", "--role", "listItem", "--name", category, "--exact", "--timeout-ms", "3000" });
+            clickVisibleListItem (category);
+
+            if (!capturedCategories.contains (category))
+            {
+                captureScreenshot (categoryScreenshotName (category));
+                capturedCategories.add (category);
+            }
+        }
+
+        void selectDemoFromCategory (const juce::String& category, const juce::String& demoFile)
+        {
+            openCategory (category);
+            clickVisibleListItem (demoFile);
+            runCli ({ "-s", sessionName, "wait", "--ms", "750" });
+        }
+
+        void assertCodeTabLoads()
+        {
+            selectTopLevelTab ("Code");
+            runCli ({ "-s", sessionName, "wait-for-text", "CodeContent", "--timeout-ms", "3000" });
+            selectTopLevelTab ("Demo");
+        }
+
+        struct DemoCase
+        {
+            const char* category = nullptr;
+            const char* file = nullptr;
+            const char* screenshot = nullptr;
+            bool isOpenGL = false;
+        };
+
+        void exerciseAdditionalDemoCoverage()
+        {
+            const DemoCase demos[] {
+                { "GUI", "CodeEditorDemo.h",          "code-editor-demo.png", false },
+                { "GUI", "ComponentDemo.h",           "component-demo.png", false },
+                { "GUI", "ComponentTransformsDemo.h", "component-transforms-demo.png", false },
+                { "GUI", "DialogsDemo.h",             "dialogs-demo.png", false },
+                { "GUI", "GridDemo.h",                "grid-demo.png", false },
+                { "GUI", "ImagesDemo.h",              "images-demo.png", false },
+                { "GUI", "FontsDemo.h",               "fonts-demo.png", false },
+                { "Audio", "AudioSettingsDemo.h",     "audio-settings-demo.png", false },
+                { "DSP", "GainDemo.h",                "gain-demo.png", false },
+                { "Utilities", "ValueTreesDemo.h",    "value-trees-demo.png", false },
+                { "Utilities", "XMLandJSONDemo.h",    "xml-and-json-demo.png", false },
+                { "GUI", "OpenGLDemo.h",              "opengl-demo.png", true }
+            };
+
+            for (const auto& demo : demos)
+            {
+                selectDemoFromCategory (demo.category, demo.file);
+                assertCodeTabLoads();
+                captureScreenshot (demo.screenshot);
+
+                if (demo.isOpenGL)
+                    exerciseOpenGLDemo();
+            }
+        }
+
+        void exerciseOpenGLDemo()
+        {
+            runCli ({ "-s", sessionName, "wait-for-text", "Shader Preset:", "--timeout-ms", "7000" });
+            runCli ({ "-s", sessionName, "check", "--role", "toggleButton", "--name", "Draw 2D graphics in background", "--exact", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "wait-for-value", "--role", "toggleButton", "--name", "Draw 2D graphics in background", "--exact", "--value", "true", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "wait", "--ms", "1000" });
+
+            captureScreenshot ("opengl-demo-component.png", { "--source", "component" });
+            auto nativeRoot = captureScreenshot ("opengl-demo-native.png", { "--source", "native" });
+            assertScreenshotHasVariation (nativeRoot, "OpenGL native root screenshot", 18, 15);
+
+            auto nativeScene = captureScreenshot ("opengl-demo-native-scene.png",
+                                                  { "--source", "native",
+                                                    "--clip-x", "170",
+                                                    "--clip-y", "145",
+                                                    "--clip-w", "500",
+                                                    "--clip-h", "270" });
+            assertScreenshotHasVariation (nativeScene, "OpenGL native clipped scene screenshot", 18, 15);
         }
 
         void exerciseAccessibilityDemo()
@@ -434,14 +555,62 @@ namespace
             captureScreenshot ("settings-light.png");
         }
 
-        void captureScreenshot (const juce::String& name)
+        juce::File captureScreenshot (const juce::String& name, std::initializer_list<juce::String> screenshotArgs = {})
         {
             runCli ({ "-s", sessionName, "wait", "--ms", "250" });
-            auto outputPath = runCli ({ "-s", sessionName, "screenshot", "--target", "root", "--file", name, "--no-base64" });
+            auto args = makeArgs ({ "-s", sessionName, "screenshot", "--target", "root", "--file", name, "--no-base64" });
+            args.addArray (makeArgs (screenshotArgs));
+
+            auto outputPath = runCli (args);
             auto screenshot = juce::File (outputPath);
             require (screenshot.existsAsFile() && screenshot.getSize() > 1000,
                      "Screenshot was not written or is too small: " + outputPath);
             copyEvidenceFile (outputPath, name);
+            return evidenceDirectory.getChildFile (name);
+        }
+
+        void assertScreenshotHasVariation (const juce::File& file,
+                                           const juce::String& label,
+                                           int minimumUniqueColours,
+                                           int minimumLuminanceRange)
+        {
+            auto image = juce::ImageFileFormat::loadFrom (file);
+            require (!image.isNull(), label + " could not be decoded: " + file.getFullPathName());
+
+            std::set<int> colours;
+            auto minLuminance = 255;
+            auto maxLuminance = 0;
+            auto samples = 0;
+            const auto stepX = juce::jmax (1, image.getWidth() / 32);
+            const auto stepY = juce::jmax (1, image.getHeight() / 32);
+
+            for (int y = 0; y < image.getHeight(); y += stepY)
+            {
+                for (int x = 0; x < image.getWidth(); x += stepX)
+                {
+                    const auto colour = image.getPixelAt (x, y);
+
+                    if (colour.getAlpha() == 0)
+                        continue;
+
+                    const auto red = (int) colour.getRed();
+                    const auto green = (int) colour.getGreen();
+                    const auto blue = (int) colour.getBlue();
+                    const auto luminance = (red * 2126 + green * 7152 + blue * 722) / 10000;
+
+                    colours.insert ((red << 16) | (green << 8) | blue);
+                    minLuminance = juce::jmin (minLuminance, luminance);
+                    maxLuminance = juce::jmax (maxLuminance, luminance);
+                    ++samples;
+                }
+            }
+
+            require (samples > 20, label + " did not contain enough opaque pixels");
+
+            const auto luminanceRange = maxLuminance - minLuminance;
+            require ((int) colours.size() >= minimumUniqueColours && luminanceRange >= minimumLuminanceRange,
+                     label + " looks blank or too flat: uniqueColours=" + juce::String ((int) colours.size())
+                         + " luminanceRange=" + juce::String (luminanceRange));
         }
 
         void copyEvidenceFile (const juce::String& sourcePath, const juce::String& evidenceName)

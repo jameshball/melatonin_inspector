@@ -554,6 +554,7 @@ namespace melatonin
                                                      { "semanticControls", true },
                                                      { "richInput", true },
                                                      { "screenshots", true },
+                                                     { "nativeScreenshots", true },
                                                      { "tracing", true },
                                                      { "windows", true } }) },
                              { "security", object ({ { "allowInput", options.allowInput },
@@ -723,7 +724,23 @@ namespace melatonin
             if (area.isEmpty())
                 return error ("screenshot_failed", "Screenshot clip is empty.");
 
-            auto image = target->createComponentSnapshot (area, false, (float) getDouble (params, "scale", 1.0));
+            const auto scale = (float) getDouble (params, "scale", 1.0);
+            const auto source = getString (params, "source", "component");
+
+            if (source != "auto" && source != "component" && source != "native")
+                return error ("invalid_screenshot_source", "Screenshot source must be auto, component, or native.");
+
+            juce::String nativeFailure;
+            auto image = (source == "native" || (source == "auto" && target == root.getComponent()))
+                             ? createNativeScreenshot (*target, area, scale, nativeFailure)
+                             : juce::Image();
+
+            if (image.isNull() && source == "native")
+                return error ("screenshot_failed", nativeFailure.isNotEmpty() ? nativeFailure
+                                                                              : juce::String ("Could not create native screenshot."));
+
+            if (image.isNull())
+                image = target->createComponentSnapshot (area, false, scale);
 
             if (image.isNull())
                 return error ("screenshot_failed", "Could not create component snapshot.");
@@ -765,6 +782,55 @@ namespace melatonin
                 result.getDynamicObject()->setProperty ("base64", juce::Base64::toBase64 (pngBytes.getData(), pngBytes.getSize()));
 
             return result;
+        }
+
+        juce::Image createNativeScreenshot (juce::Component& target,
+                                            juce::Rectangle<int> area,
+                                            float scale,
+                                            juce::String& failure) const
+        {
+           #if JUCE_MAC || JUCE_WINDOWS || JUCE_LINUX || JUCE_BSD
+            auto* topLevel = target.getTopLevelComponent();
+
+            if (topLevel == nullptr)
+                topLevel = &target;
+
+            auto* nativeHandle = topLevel->getWindowHandle();
+
+            if (nativeHandle == nullptr)
+            {
+                failure = "Target top-level component does not have a native window handle.";
+                return {};
+            }
+
+            auto nativeImage = juce::createSnapshotOfNativeWindow (nativeHandle);
+
+            if (nativeImage.isNull())
+            {
+                failure = "JUCE could not capture the native window.";
+                return {};
+            }
+
+            auto crop = topLevel->getLocalArea (&target, area).getIntersection (nativeImage.getBounds());
+
+            if (crop.isEmpty())
+            {
+                failure = "Native screenshot crop is outside the captured window.";
+                return {};
+            }
+
+            auto image = nativeImage.getClippedImage (crop);
+
+            if (scale > 0.0f && scale != 1.0f)
+                image = image.rescaled (juce::roundToInt ((float) image.getWidth() * scale),
+                                        juce::roundToInt ((float) image.getHeight() * scale));
+
+            return image;
+           #else
+            juce::ignoreUnused (target, area, scale);
+            failure = "Native screenshots are not supported on this platform.";
+            return {};
+           #endif
         }
 
         juce::var writableArtifactFile (const juce::String& requestedPath) const
@@ -1906,6 +1972,7 @@ namespace melatonin
                                    "key",
                                    "file",
                                    "target",
+                                   "source",
                                    "format",
                                    "depth",
                                    "timeoutMs",

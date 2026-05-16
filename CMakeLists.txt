@@ -225,6 +225,7 @@ if (MelatoninInspector_IS_TOP_LEVEL)
             MELATONIN_UI_EXECUTABLE="$<TARGET_FILE:melatonin-ui>")
         target_link_libraries(melatonin-demorunner-e2e PRIVATE
             juce::juce_core
+            juce::juce_graphics
             juce::juce_recommended_config_flags
             juce::juce_recommended_lto_flags
             juce::juce_recommended_warning_flags)

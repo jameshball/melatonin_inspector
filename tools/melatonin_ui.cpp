@@ -433,6 +433,9 @@ namespace
                                 { "target", object ({ { "type", "string" }, { "default", "root" } }) },
                                 { "ref", stringSchema() },
                                 { "locator", locatorSchema() },
+                                { "source", object ({ { "type", "string" },
+                                                      { "enum", array ({ "auto", "component", "native" }) },
+                                                      { "default", "component" } }) },
                                 { "file", stringSchema() },
                                 { "clipX", numberSchema() },
                                 { "clipY", numberSchema() },
@@ -810,7 +813,7 @@ namespace
             << "  melatonin-ui -s <session> trace-stop\n"
             << "  melatonin-ui -s <session> locator [--role role] [--name text] [--text text] [--format json]\n"
             << "  melatonin-ui -s <session> snapshot [--format text|json] [--depth n]\n"
-            << "  melatonin-ui -s <session> screenshot [--target root|--ref m1-1] --file /tmp/root.png\n"
+            << "  melatonin-ui -s <session> screenshot [--target root|--ref m1-1] [--source auto|component|native] --file /tmp/root.png\n"
             << "  melatonin-ui -s <session> click <ref> [--button left|right|middle] [--click-count n] [--position x,y]\n"
             << "  melatonin-ui -s <session> dblclick <ref>\n"
             << "  melatonin-ui -s <session> right-click <ref>\n"
@@ -954,6 +957,7 @@ int main (int argc, char* argv[])
             auto file = optionValue (args, "--file");
             auto ref = optionValue (args, "--ref");
             auto target = optionValue (args, "--target", "root");
+            auto source = optionValue (args, "--source");
             auto clipX = optionValue (args, "--clip-x");
             auto clipY = optionValue (args, "--clip-y");
             auto clipW = optionValue (args, "--clip-w");
@@ -963,6 +967,7 @@ int main (int argc, char* argv[])
             auto locator = parseLocatorOptions (args);
             auto params = object ({ { "file", file }, { "ref", ref }, { "target", target } });
 
+            if (source.isNotEmpty()) params.getDynamicObject()->setProperty ("source", source);
             if (clipX.isNotEmpty()) params.getDynamicObject()->setProperty ("clipX", clipX.getIntValue());
             if (clipY.isNotEmpty()) params.getDynamicObject()->setProperty ("clipY", clipY.getIntValue());
             if (clipW.isNotEmpty()) params.getDynamicObject()->setProperty ("clipW", clipW.getIntValue());

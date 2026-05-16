@@ -104,6 +104,7 @@ DemoRunner coverage:
 - scrollable settings.
 - real buttons/toggles/sliders/combos/text where deterministic.
 - screenshots.
+- native-source OpenGL screenshot evidence using the heavyweight OpenGLDemo.
 - representative MCP snapshot/screenshot/action.
 
 ## Test Matrix
@@ -129,6 +130,7 @@ DemoRunner CI:
 - Automation enabled.
 - DemoRunner automation option enabled.
 - Deterministic E2E under `xvfb-run` in PR CI.
+- `LIBGL_ALWAYS_SOFTWARE=1` for OpenGL stability on Linux runners.
 - Timeout larger than fixture job.
 
 Artifact policy:
