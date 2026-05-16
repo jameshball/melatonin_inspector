@@ -128,13 +128,13 @@ jobs:
           mkdir -p "$MELATONIN_SCREENSHOT_DIR"
           xvfb-run -a Builds/automation_fixture_artefacts/automation_fixture
 
-      - name: Run DemoRunner automation smoke
+      - name: Run DemoRunner automation e2e
         if: ${{ matrix.demorunner_e2e == true && runner.os == 'Linux' }}
         env:
           MELATONIN_DEMORUNNER_ARTIFACT_DIR: ${{ github.workspace }}/Builds/demorunner-evidence
         run: |
           mkdir -p "$MELATONIN_DEMORUNNER_ARTIFACT_DIR"
-          xvfb-run -a Builds/melatonin-demorunner-smoke_artefacts/melatonin-demorunner-smoke
+          xvfb-run -a Builds/melatonin-demorunner-e2e_artefacts/melatonin-demorunner-e2e
 
       - name: Upload automation evidence
         if: ${{ always() && matrix.automation_e2e == true && runner.os == 'Linux' }}

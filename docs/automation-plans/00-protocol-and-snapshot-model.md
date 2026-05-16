@@ -150,7 +150,7 @@ tests/automation_test_helpers.h
 DemoRunner support should consume this infrastructure rather than introducing a
 separate test harness.
 
-Early smoke DemoRunner should validate:
+Early DemoRunner wrapper should validate:
 
 - capabilities.
 - snapshot with `stateHash`.

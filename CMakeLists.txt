@@ -216,19 +216,19 @@ if (MelatoninInspector_IS_TOP_LEVEL)
             message(FATAL_ERROR "MELATONIN_INSPECTOR_BUILD_DEMORUNNER_AUTOMATION requires MELATONIN_INSPECTOR_BUILD_CLI=ON")
         endif ()
 
-        juce_add_console_app(melatonin-demorunner-smoke VERSION 1.0.0)
-        juce_generate_juce_header(melatonin-demorunner-smoke)
-        target_sources(melatonin-demorunner-smoke PRIVATE tests/demorunner_smoke.cpp)
-        target_compile_definitions(melatonin-demorunner-smoke PRIVATE
+        juce_add_console_app(melatonin-demorunner-e2e VERSION 1.0.0)
+        juce_generate_juce_header(melatonin-demorunner-e2e)
+        target_sources(melatonin-demorunner-e2e PRIVATE tests/demorunner_e2e.cpp)
+        target_compile_definitions(melatonin-demorunner-e2e PRIVATE
             JUCE_USE_CURL=0
             MELATONIN_DEMORUNNER_EXECUTABLE="$<TARGET_FILE:melatonin-demorunner>"
             MELATONIN_UI_EXECUTABLE="$<TARGET_FILE:melatonin-ui>")
-        target_link_libraries(melatonin-demorunner-smoke PRIVATE
+        target_link_libraries(melatonin-demorunner-e2e PRIVATE
             juce::juce_core
             juce::juce_recommended_config_flags
             juce::juce_recommended_lto_flags
             juce::juce_recommended_warning_flags)
-        add_dependencies(melatonin-demorunner-smoke melatonin-demorunner melatonin-ui)
+        add_dependencies(melatonin-demorunner-e2e melatonin-demorunner melatonin-ui)
     endif ()
 endif ()
 

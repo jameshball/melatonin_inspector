@@ -19,8 +19,8 @@ native JUCE applications and C++ fixtures.
   execution is added later.
 - MCP runs through the native C++ `melatonin-ui mcp` stdio mode. CI must not
   require Node.
-- Full DemoRunner PR gating should be staged. Start with smoke gating, measure
-  runtime/flakiness, then promote the full suite.
+- DemoRunner PR gating should run the deterministic E2E allowlist, not a
+  hardware/network-dependent sweep of every DemoRunner demo.
 
 ## Public Protocol Changes
 
@@ -128,8 +128,7 @@ DemoRunner CI:
 - Linux JUCE 8.
 - Automation enabled.
 - DemoRunner automation option enabled.
-- Smoke E2E under `xvfb-run` in PR CI.
-- Full deterministic E2E under `xvfb-run` in scheduled/manual CI until promoted.
+- Deterministic E2E under `xvfb-run` in PR CI.
 - Timeout larger than fixture job.
 
 Artifact policy:
@@ -158,8 +157,7 @@ Artifact policy:
 - Every feature plan adds C++ self-test coverage before being considered done.
 - Every public CLI addition is covered.
 - Every public MCP addition is covered by a C++ JSON-RPC child-process test.
-- DemoRunner smoke E2E is PR-gated once implemented.
-- Full DemoRunner E2E is promoted to PR gating only after measured stability.
+- DemoRunner E2E is PR-gated once implemented.
 - CI artifacts make failures inspectable without rerunning locally.
 
 ## Evidence Artifacts

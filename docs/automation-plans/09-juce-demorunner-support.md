@@ -8,10 +8,18 @@ fixture.
 
 This work has two milestones:
 
-- Early smoke wrapper: build and launch an instrumented DemoRunner, take a
+- Initial wrapper: build and launch an instrumented DemoRunner, take a
   snapshot and screenshot, and prove one CLI and one MCP call.
 - Full deterministic suite: run broader navigation and control scenarios once
   runtime and flake rate are measured.
+
+Current implementation status:
+
+- The wrapper builds a patched DemoRunner and advertises `juce_demorunner`.
+- The C++ harness has been expanded from initial wrapper coverage to a
+  deterministic real-app E2E pass.
+- The E2E target should be named `melatonin-demorunner-e2e`; old `smoke`
+  wording is obsolete and should not be used for new CI or documentation.
 
 ## Playwright Equivalent
 
@@ -104,7 +112,7 @@ those helpers are extracted.
 
 ## DemoRunner Scenarios
 
-Early smoke scenario:
+Early wrapper scenario:
 
 - Build instrumented DemoRunner.
 - Launch and wait for `juce_demorunner`.
@@ -139,7 +147,7 @@ Skip or quarantine:
 
 ## Test Matrix
 
-C++ DemoRunner self-test:
+C++ DemoRunner E2E self-test:
 
 - launches instrumented DemoRunner.
 - waits for `juce_demorunner` session.
@@ -154,9 +162,8 @@ C++ DemoRunner self-test:
 
 CI:
 
-- Early smoke is PR-gated under `xvfb-run`.
-- Full deterministic suite starts as manual/scheduled until runtime and flake
-  rate are measured, then becomes PR-gated.
+- Deterministic E2E is PR-gated under `xvfb-run` once it stays on the safe
+  allowlist.
 - Longer timeout than the small fixture.
 - Upload screenshots/traces on failure.
 
@@ -173,9 +180,7 @@ CI:
 ## Acceptance Criteria
 
 - DemoRunner automation builds through CMake.
-- Early DemoRunner smoke runs in PR CI.
-- Full deterministic DemoRunner E2E is promoted to PR CI only after measured
-  stability is acceptable.
+- DemoRunner E2E runs in PR CI.
 - The suite validates navigation across real pages/tabs/panels.
 - The suite does not rely on hardware, network, or heavyweight rendering demos.
 

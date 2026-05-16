@@ -67,20 +67,20 @@ namespace
         return *object;
     }
 
-    class DemoRunnerSmoke
+    class DemoRunnerE2E
     {
     public:
-        DemoRunnerSmoke()
+        DemoRunnerE2E()
             : demoRunnerPath (juce::String (MELATONIN_DEMORUNNER_EXECUTABLE)),
               cliPath (juce::String (MELATONIN_UI_EXECUTABLE))
         {
             const auto artifactDir = juce::SystemStats::getEnvironmentVariable ("MELATONIN_DEMORUNNER_ARTIFACT_DIR", {});
             evidenceDirectory = artifactDir.isNotEmpty()
                                     ? juce::File (artifactDir)
-                                    : tempDirectory().getChildFile ("melatonin-demorunner-smoke");
+                                    : tempDirectory().getChildFile ("melatonin-demorunner-e2e");
         }
 
-        ~DemoRunnerSmoke()
+        ~DemoRunnerE2E()
         {
             stopDemoRunner();
         }
@@ -507,7 +507,7 @@ namespace
             });
 
             auto lines = juce::StringArray::fromLines (output);
-            require (lines.size() >= 4, "MCP smoke expected at least 4 response lines, got " + juce::String (lines.size()));
+            require (lines.size() >= 4, "MCP E2E expected at least 4 response lines, got " + juce::String (lines.size()));
 
             assertMcpResult (parseMcpLine (lines, 0), 1);
 
@@ -547,13 +547,13 @@ int main()
 {
     try
     {
-        DemoRunnerSmoke().run();
-        std::cout << "ok - DemoRunner automation smoke passed\n";
+        DemoRunnerE2E().run();
+        std::cout << "ok - DemoRunner automation e2e passed\n";
         return 0;
     }
     catch (const std::exception& e)
     {
-        std::cerr << "DemoRunner automation smoke failed: " << e.what() << "\n";
+        std::cerr << "DemoRunner automation e2e failed: " << e.what() << "\n";
         return 1;
     }
 }

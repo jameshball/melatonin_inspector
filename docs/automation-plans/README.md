@@ -57,7 +57,7 @@ Implement in this order:
 0. Protocol, snapshot model, security gates, and shared C++ test harness.
 1. Locator engine.
 2. Actionability and auto-wait.
-3. Early DemoRunner smoke wrapper, once locator/actionability primitives exist.
+3. DemoRunner E2E wrapper, once locator/actionability primitives exist.
 4. Semantic JUCE controls.
 5. Rich input.
 6. Screenshots and visual context.
@@ -71,10 +71,12 @@ The sequencing is important. Later features should build on locator resolution,
 actionability checks, and shared C++ test utilities rather than duplicating their
 own target lookup, retry, or child-process logic.
 
-The DemoRunner work is intentionally split. An early smoke wrapper should land
-as soon as it can prove the automation endpoint works against a real JUCE app.
-The full deterministic DemoRunner suite should become PR-gated only after its
-runtime and flake rate are measured.
+The DemoRunner work is intentionally staged. A thin wrapper should land as soon
+as it can prove the automation endpoint works against a real JUCE app, then it
+should be expanded into a deterministic E2E suite that covers navigation,
+semantic controls, screenshots, MCP, and traces. PR gating should stay tied to
+the deterministic allowlist rather than attempting to drive hardware, network,
+camera, video, or heavyweight demos.
 
 ## Shared Implementation Rules
 
