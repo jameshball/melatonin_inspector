@@ -289,8 +289,36 @@ namespace
             runMcpSmokeCheck();
 
             auto snapshot = readSnapshot();
+            auto capabilities = juce::JSON::parse (runCli ({ "-s", sessionName, "capabilities" }));
+            auto& capabilitiesObject = asObject (capabilities, "capabilities");
+            require ((int) capabilitiesObject.getProperty ("protocolVersion") == 1, "capabilities returned the wrong protocol version");
+
+            auto securityValue = capabilitiesObject.getProperty ("security");
+            auto& security = asObject (securityValue, "capabilities.security");
+            require ((bool) security.getProperty ("allowInput"), "capabilities did not expose allowInput=true");
+            require ((bool) security.getProperty ("allowMutation"), "capabilities did not expose allowMutation=true");
+            require ((bool) security.getProperty ("allowFileWrite"), "capabilities did not expose allowFileWrite=true");
+            require (security.getProperty ("artifactRoot").toString() == screenshotDirectory.getFullPathName(),
+                     "capabilities returned the wrong artifact root");
+
+            auto snapshotAgain = readSnapshot();
+            auto& snapshotObject = asObject (snapshot, "snapshot");
+            auto& snapshotAgainObject = asObject (snapshotAgain, "snapshotAgain");
+            auto initialStateHash = snapshotObject.getProperty ("stateHash").toString();
+            require (initialStateHash.isNotEmpty(), "snapshot is missing stateHash");
+            require (initialStateHash == snapshotAgainObject.getProperty ("stateHash").toString(),
+                     "repeated snapshots without UI changes should keep the same stateHash");
+            require ((int) snapshotObject.getProperty ("generation") != (int) snapshotAgainObject.getProperty ("generation"),
+                     "repeated snapshots should still advance the ref generation");
+            snapshot = snapshotAgain;
+
             require (!findByComponentName (snapshot, "fixture.tabs").isVoid(), "snapshot is missing top-level tabs");
             require (!findByComponentName (snapshot, "controls.slider").isVoid(), "snapshot is missing the controls slider");
+
+            auto deniedScreenshot = screenshotDirectory.getSiblingFile ("melatonin-automation-denied.png");
+            auto deniedOutput = runCliExpectFailure ({ "-s", sessionName, "screenshot", "--target", "root", "--file", deniedScreenshot.getFullPathName() });
+            require (deniedOutput.contains ("artifact root") || deniedOutput.contains ("artifact_path_denied"),
+                     "screenshot outside artifact root should fail with artifact_path_denied\n" + deniedOutput);
 
             rootScreenshot = screenshotDirectory.getChildFile ("melatonin-automation-e2e-root.png");
             runCli ({ "-s", sessionName, "screenshot", "--target", "root", "--file", rootScreenshot.getFullPathName() });
@@ -305,6 +333,8 @@ namespace
 
             clickXYAtNode (findByComponentName (snapshot, "controls.power"));
             snapshot = readSnapshot();
+            require (asObject (snapshot, "snapshot after click").getProperty ("stateHash").toString() != initialStateHash,
+                     "clicking the power button should change the semantic stateHash");
             require ((bool) asObject (findByComponentName (snapshot, "controls.power"), "controls.power").getProperty ("toggleState"),
                      "click-xy did not toggle the power button");
             assertStatus (snapshot, "Status: Power On");
@@ -382,10 +412,19 @@ namespace
             command.add (cliPath.getFullPathName());
             command.addArray (args);
 
-            return runProcess (command, "melatonin-ui " + args.joinIntoString (" "));
+            return runProcess (command, "melatonin-ui " + args.joinIntoString (" "), true);
         }
 
-        juce::String runProcess (const juce::StringArray& command, const juce::String& label)
+        juce::String runCliExpectFailure (std::initializer_list<juce::String> args)
+        {
+            juce::StringArray command;
+            command.add (cliPath.getFullPathName());
+            command.addArray (makeArgs (args));
+
+            return runProcess (command, "melatonin-ui " + makeArgs (args).joinIntoString (" "), false);
+        }
+
+        juce::String runProcess (const juce::StringArray& command, const juce::String& label, bool expectSuccess)
         {
             auto displayCommand = command.joinIntoString (" ");
 
@@ -421,8 +460,16 @@ namespace
                 output << juce::String::fromUTF8 (buffer, bytesRead);
             }
 
-            require (process.getExitCode() == 0,
-                     label + " failed with exit code " + juce::String ((int) process.getExitCode()) + "\n" + output);
+            if (expectSuccess)
+            {
+                require (process.getExitCode() == 0,
+                         label + " failed with exit code " + juce::String ((int) process.getExitCode()) + "\n" + output);
+            }
+            else
+            {
+                require (process.getExitCode() != 0,
+                         label + " unexpectedly succeeded\n" + output);
+            }
 
             return output;
         }
@@ -449,7 +496,7 @@ namespace
             command.add ("cat " + shellQuote (requestFile.getFullPathName()) + " | " + shellQuote (cliPath.getFullPathName()) + " mcp");
         #endif
 
-            auto output = runProcess (command, "melatonin-ui mcp");
+            auto output = runProcess (command, "melatonin-ui mcp", true);
             requestFile.deleteFile();
             return output;
         }
@@ -481,11 +528,12 @@ namespace
             auto output = runMcpBatch ({
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}})",
                 R"({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})",
-                R"({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"juce_snapshot","arguments":{"session":"automation_fixture","format":"text","depth":12}}})"
+                R"({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"juce_capabilities","arguments":{"session":"automation_fixture"}}})",
+                R"({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"juce_snapshot","arguments":{"session":"automation_fixture","format":"text","depth":12}}})"
             });
 
             auto lines = juce::StringArray::fromLines (output);
-            require (lines.size() >= 3, "MCP smoke expected at least 3 response lines, got " + juce::String (lines.size()) + "\n" + output);
+            require (lines.size() >= 4, "MCP smoke expected at least 4 response lines, got " + juce::String (lines.size()) + "\n" + output);
 
             auto initializeResult = assertMcpResult (parseMcpLine (lines, 0), 1);
             auto& initialize = asObject (initializeResult, "MCP initialize result");
@@ -506,7 +554,14 @@ namespace
 
             require (foundSnapshotTool, "MCP tools/list did not expose juce_snapshot");
 
-            auto snapshotCallResult = assertMcpResult (parseMcpLine (lines, 2), 3);
+            auto capabilitiesCallResult = assertMcpResult (parseMcpLine (lines, 2), 3);
+            auto& capabilitiesCall = asObject (capabilitiesCallResult, "MCP capabilities result");
+            auto capabilitiesContent = capabilitiesCall.getProperty ("content");
+            require (capabilitiesContent.isArray() && !capabilitiesContent.getArray()->isEmpty(), "MCP capabilities did not return content");
+            require (asObject (capabilitiesContent.getArray()->getReference (0), "MCP capabilities content").getProperty ("text").toString().contains ("protocolVersion"),
+                     "MCP capabilities content did not include protocolVersion");
+
+            auto snapshotCallResult = assertMcpResult (parseMcpLine (lines, 3), 4);
             auto& snapshotCall = asObject (snapshotCallResult, "MCP snapshot result");
             auto content = snapshotCall.getProperty ("content");
             require (content.isArray() && !content.getArray()->isEmpty(), "MCP snapshot did not return content");
@@ -882,6 +937,10 @@ public:
 #if MELATONIN_INSPECTOR_ENABLE_AUTOMATION
         melatonin::AutomationOptions options;
         options.sessionName = sessionName;
+        options.allowFileWrite = true;
+        options.artifactRoot = juce::SystemStats::getEnvironmentVariable ("MELATONIN_SCREENSHOT_DIR", {}).isNotEmpty()
+                                   ? juce::File (juce::SystemStats::getEnvironmentVariable ("MELATONIN_SCREENSHOT_DIR", {}))
+                                   : tempDirectory();
         inspector->enableAutomation (options);
 #endif
 

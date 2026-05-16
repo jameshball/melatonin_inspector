@@ -247,6 +247,9 @@ namespace
             tool ("juce_list_sessions",
                   "List running melatonin_inspector automation sessions.",
                   toolSchema ({})),
+            tool ("juce_capabilities",
+                  "Return protocol, feature, and security capabilities for a running automation session.",
+                  toolSchema ({ { "session", stringSchema() } })),
             tool ("juce_snapshot",
                   "Return a compact Playwright-style snapshot of a JUCE component tree.",
                   toolSchema ({ { "session", stringSchema() },
@@ -297,6 +300,7 @@ namespace
     juce::String methodForTool (const juce::String& name)
     {
         if (name == "juce_snapshot") return "snapshot";
+        if (name == "juce_capabilities") return "capabilities";
         if (name == "juce_screenshot") return "screenshot";
         if (name == "juce_click") return "click";
         if (name == "juce_click_xy") return "click_xy";
@@ -509,6 +513,7 @@ namespace
             << "Usage:\n"
             << "  melatonin-ui list\n"
             << "  melatonin-ui mcp\n"
+            << "  melatonin-ui -s <session> capabilities\n"
             << "  melatonin-ui -s <session> snapshot [--format text|json] [--depth n]\n"
             << "  melatonin-ui -s <session> screenshot [--target root|--ref m1-1] --file /tmp/root.png\n"
             << "  melatonin-ui -s <session> click <ref>\n"
@@ -593,6 +598,12 @@ int main (int argc, char* argv[])
             auto depth = optionValue (args, "--depth", "8").getIntValue();
             auto result = request (*sessionObject, "snapshot", object ({ { "format", format }, { "depth", depth } }));
             printResult (result, format == "json");
+            return 0;
+        }
+
+        if (command == "capabilities")
+        {
+            printResult (request (*sessionObject, "capabilities", emptyObject()), true);
             return 0;
         }
 

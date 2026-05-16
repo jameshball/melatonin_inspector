@@ -25,6 +25,8 @@ namespace melatonin
         bool advertise = true;
         bool allowInput = true;
         bool allowMutation = true;
+        bool allowFileWrite = true;
+        juce::File artifactRoot;
     };
 
 #if MELATONIN_INSPECTOR_ENABLE_AUTOMATION
@@ -117,6 +119,7 @@ namespace melatonin
         juce::File advertisementFile;
         juce::Array<ComponentRef> refs;
         int generation = 0;
+        static constexpr int protocolVersion = 1;
 
         void run() override
         {
@@ -231,6 +234,9 @@ namespace melatonin
             if (method == "ping")
                 return object ({ { "status", "ok" } });
 
+            if (method == "capabilities")
+                return capabilities();
+
             if (method == "snapshot")
                 return snapshot (params);
 
@@ -264,6 +270,23 @@ namespace melatonin
             return error ("unknown_method", "Unknown automation method: " + method);
         }
 
+        juce::var capabilities() const
+        {
+            return object ({ { "protocolVersion", protocolVersion },
+                             { "session", options.sessionName },
+                             { "features", object ({ { "locators", false },
+                                                     { "actionability", false },
+                                                     { "semanticControls", false },
+                                                     { "richInput", false },
+                                                     { "screenshots", true },
+                                                     { "tracing", false },
+                                                     { "windows", false } }) },
+                             { "security", object ({ { "allowInput", options.allowInput },
+                                                     { "allowMutation", options.allowMutation },
+                                                     { "allowFileWrite", options.allowFileWrite },
+                                                     { "artifactRoot", options.artifactRoot.getFullPathName() } }) } });
+        }
+
         juce::var snapshot (juce::DynamicObject& params)
         {
             if (root == nullptr)
@@ -278,11 +301,12 @@ namespace melatonin
 
             juce::String text;
             appendTextSnapshot (text, tree, 0);
+            const auto stateHash = calculateStateHash (tree);
 
             if (format == "json")
-                return object ({ { "generation", generation }, { "tree", tree }, { "text", text } });
+                return object ({ { "generation", generation }, { "stateHash", stateHash }, { "tree", tree }, { "text", text } });
 
-            return object ({ { "generation", generation }, { "text", text } });
+            return object ({ { "generation", generation }, { "stateHash", stateHash }, { "text", text } });
         }
 
         juce::var screenshot (juce::DynamicObject& params)
@@ -320,9 +344,13 @@ namespace melatonin
 
             if (filePath.isNotEmpty())
             {
-                auto file = juce::File (filePath).getFullPathName().isNotEmpty()
-                                ? juce::File (filePath)
-                                : juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("melatonin-screenshot.png");
+                auto fileOrError = writableArtifactFile (filePath);
+
+                if (auto* errorObject = fileOrError.getDynamicObject())
+                    if (errorObject->getProperty ("__error").isString())
+                        return fileOrError;
+
+                auto file = juce::File (fileOrError.toString());
 
                 file.getParentDirectory().createDirectory();
 
@@ -337,6 +365,28 @@ namespace melatonin
                              { "height", image.getHeight() },
                              { "file", absolutePath },
                              { "base64", juce::Base64::toBase64 (pngBytes.getData(), pngBytes.getSize()) } });
+        }
+
+        juce::var writableArtifactFile (const juce::String& requestedPath) const
+        {
+            if (!options.allowFileWrite)
+                return error ("file_write_disabled", "Automation file output is disabled for this session.");
+
+            juce::File file (requestedPath);
+            const auto hasArtifactRoot = options.artifactRoot.getFullPathName().isNotEmpty();
+
+            if (hasArtifactRoot)
+            {
+                auto rootDirectory = options.artifactRoot;
+
+                if (!juce::File::isAbsolutePath (requestedPath))
+                    file = rootDirectory.getChildFile (requestedPath);
+
+                if (!file.isAChildOf (rootDirectory))
+                    return error ("artifact_path_denied", "Automation file output must stay within the artifact root.");
+            }
+
+            return file.getFullPathName();
         }
 
         juce::var click (juce::DynamicObject& params)
@@ -809,6 +859,52 @@ namespace melatonin
             if (children.isArray())
                 for (auto& child : *children.getArray())
                     appendTextSnapshot (out, child, indent + 1);
+        }
+
+        static juce::String calculateStateHash (const juce::var& tree)
+        {
+            const auto canonical = canonicalizeSnapshotNode (tree);
+            return juce::String::toHexString (juce::JSON::toString (canonical, true).hashCode64());
+        }
+
+        static juce::var canonicalizeSnapshotNode (const juce::var& node)
+        {
+            auto* object = node.getDynamicObject();
+
+            if (object == nullptr)
+                return {};
+
+            auto* result = new juce::DynamicObject();
+
+            for (auto name : { "name",
+                               "componentName",
+                               "class",
+                               "enabled",
+                               "visible",
+                               "focused",
+                               "role",
+                               "title",
+                               "value",
+                               "toggleable",
+                               "toggleState" })
+            {
+                auto property = object->getProperty (name);
+
+                if (!property.isVoid())
+                    result->setProperty (name, property);
+            }
+
+            result->setProperty ("bounds", object->getProperty ("bounds"));
+
+            juce::Array<juce::var> children;
+            auto sourceChildren = object->getProperty ("children");
+
+            if (sourceChildren.isArray())
+                for (auto& child : *sourceChildren.getArray())
+                    children.add (canonicalizeSnapshotNode (child));
+
+            result->setProperty ("children", children);
+            return result;
         }
 
         static juce::var rectangleToVar (juce::Rectangle<int> rectangle)
