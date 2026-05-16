@@ -195,7 +195,19 @@ namespace melatonin
         static void writeLine (juce::StreamingSocket& client, const juce::String& line)
         {
             const auto payload = line + "\n";
-            client.write (payload.toRawUTF8(), (int) payload.getNumBytesAsUTF8());
+            auto* data = payload.toRawUTF8();
+            auto bytesRemaining = (int) payload.getNumBytesAsUTF8();
+
+            while (bytesRemaining > 0)
+            {
+                const auto bytesWritten = client.write (data, bytesRemaining);
+
+                if (bytesWritten <= 0)
+                    break;
+
+                data += bytesWritten;
+                bytesRemaining -= bytesWritten;
+            }
         }
 
         juce::String handleRequest (const juce::String& requestLine)
@@ -334,11 +346,11 @@ namespace melatonin
                 snapshotParams.setProperty ("format", "json");
                 snapshotParams.setProperty ("depth", getInt (params, "depth", 12));
                 auto result = snapshot (snapshotParams);
-                auto* object = result.getDynamicObject();
-                auto tree = object != nullptr ? object->getProperty ("tree") : juce::var();
+                auto* snapshotObject = result.getDynamicObject();
+                auto tree = snapshotObject != nullptr ? snapshotObject->getProperty ("tree") : juce::var();
 
                 return treeContainsText (tree, expected, (bool) params.getProperty ("exact"), params.getProperty ("visible"))
-                           ? result
+                           ? AutomationController::object ({ { "text", expected } })
                            : error ("wait_not_ready", "Text was not found.");
             }
 
@@ -1817,8 +1829,7 @@ namespace melatonin
                 return;
             }
 
-            auto bounds = getRootBounds (target);
-            synthesizeClickAt (bounds.getCentre());
+            synthesizeComponentClick (target, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1);
         }
 
         juce::var validateInputTarget (juce::Component& target, juce::DynamicObject& params) const
@@ -1848,10 +1859,11 @@ namespace melatonin
 
         juce::var actionabilityResult (juce::Component& target) const
         {
+            const auto bounds = getRootBounds (target);
             return object ({ { "actionability", object ({ { "attached", true },
-                                                          { "visible", target.isShowing() },
+                                                          { "visible", target.isShowing() && !bounds.isEmpty() },
                                                           { "enabled", target.isEnabled() },
-                                                          { "nonEmptyBounds", !getRootBounds (target).isEmpty() },
+                                                          { "nonEmptyBounds", !bounds.isEmpty() },
                                                           { "receivesEvents", receivesEvents (target) } }) } });
         }
 
@@ -2074,9 +2086,10 @@ namespace melatonin
             node->setProperty ("componentName", component.getName());
             node->setProperty ("class", type (component));
             node->setProperty ("enabled", component.isEnabled());
-            node->setProperty ("visible", component.isShowing());
+            const auto bounds = getRootBounds (component);
+            node->setProperty ("visible", component.isShowing() && !bounds.isEmpty());
             node->setProperty ("focused", component.hasKeyboardFocus (false));
-            node->setProperty ("bounds", rectangleToVar (getRootBounds (component)));
+            node->setProperty ("bounds", rectangleToVar (bounds));
             node->setProperty ("screenBounds", rectangleToVar (component.getScreenBounds()));
 
             if (component.isAccessible() && component.getAccessibilityHandler() != nullptr)

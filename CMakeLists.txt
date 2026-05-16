@@ -91,6 +91,7 @@ if (MelatoninInspector_IS_TOP_LEVEL)
         set(MELATONIN_DEMORUNNER_SOURCE_DIR "${JUCE_SOURCE_DIR}/examples/DemoRunner")
         set(MELATONIN_DEMORUNNER_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/melatonin_demorunner")
         file(MAKE_DIRECTORY "${MELATONIN_DEMORUNNER_GENERATED_DIR}/Source")
+        file(MAKE_DIRECTORY "${MELATONIN_DEMORUNNER_GENERATED_DIR}/Source/Demos")
 
         file(READ "${MELATONIN_DEMORUNNER_SOURCE_DIR}/Source/Main.cpp" MELATONIN_DEMORUNNER_MAIN)
         string(REPLACE
@@ -115,6 +116,28 @@ if (MelatoninInspector_IS_TOP_LEVEL)
         endif ()
         file(WRITE "${MELATONIN_DEMORUNNER_GENERATED_DIR}/Source/Main.cpp" "${MELATONIN_DEMORUNNER_MAIN}")
 
+        file(READ "${MELATONIN_DEMORUNNER_SOURCE_DIR}/Source/Demos/JUCEDemos.cpp" MELATONIN_DEMORUNNER_DEMOS)
+        string(REPLACE
+            "#include \"../../../Assets/DemoUtilities.h\""
+            "#include \"${JUCE_SOURCE_DIR}/examples/Assets/DemoUtilities.h\""
+            MELATONIN_DEMORUNNER_DEMOS
+            "${MELATONIN_DEMORUNNER_DEMOS}")
+        string(REPLACE
+            "    auto* currentDevice = sharedAudioDeviceManager->getCurrentAudioDevice();"
+            "   #if MELATONIN_DEMORUNNER_SKIP_AUDIO_DEVICE_INITIALISE\n    ignoreUnused (numInputChannels, numOutputChannels);\n    return *sharedAudioDeviceManager;\n   #else\n\n    auto* currentDevice = sharedAudioDeviceManager->getCurrentAudioDevice();"
+            MELATONIN_DEMORUNNER_DEMOS
+            "${MELATONIN_DEMORUNNER_DEMOS}")
+        string(REPLACE
+            "    return *sharedAudioDeviceManager;\n}"
+            "   #endif\n\n    return *sharedAudioDeviceManager;\n}"
+            MELATONIN_DEMORUNNER_DEMOS
+            "${MELATONIN_DEMORUNNER_DEMOS}")
+        string(FIND "${MELATONIN_DEMORUNNER_DEMOS}" "MELATONIN_DEMORUNNER_SKIP_AUDIO_DEVICE_INITIALISE" MELATONIN_DEMORUNNER_AUDIO_PATCH)
+        if (MELATONIN_DEMORUNNER_AUDIO_PATCH EQUAL -1)
+            message(FATAL_ERROR "JUCE DemoRunner automation patch failed: Demos/JUCEDemos.cpp patch anchors changed")
+        endif ()
+        file(WRITE "${MELATONIN_DEMORUNNER_GENERATED_DIR}/Source/Demos/JUCEDemos.cpp" "${MELATONIN_DEMORUNNER_DEMOS}")
+
         juce_add_gui_app(melatonin-demorunner
             BUNDLE_ID                       com.melatonin.inspector.demorunner
             ICON_BIG                        "${MELATONIN_DEMORUNNER_SOURCE_DIR}/Source/JUCEAppIcon.png"
@@ -133,13 +156,19 @@ if (MelatoninInspector_IS_TOP_LEVEL)
         target_sources(melatonin-demorunner PRIVATE
             "${MELATONIN_DEMORUNNER_SOURCE_DIR}/Source/Demos/DemoPIPs1.cpp"
             "${MELATONIN_DEMORUNNER_SOURCE_DIR}/Source/Demos/DemoPIPs2.cpp"
-            "${MELATONIN_DEMORUNNER_SOURCE_DIR}/Source/Demos/JUCEDemos.cpp"
+            "${MELATONIN_DEMORUNNER_GENERATED_DIR}/Source/Demos/JUCEDemos.cpp"
             "${MELATONIN_DEMORUNNER_GENERATED_DIR}/Source/Main.cpp"
             "${MELATONIN_DEMORUNNER_SOURCE_DIR}/Source/UI/DemoContentComponent.cpp"
             "${MELATONIN_DEMORUNNER_SOURCE_DIR}/Source/UI/MainComponent.cpp")
 
+        if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+            set_source_files_properties("${MELATONIN_DEMORUNNER_GENERATED_DIR}/Source/Demos/JUCEDemos.cpp"
+                PROPERTIES COMPILE_OPTIONS "-Wno-unused-function")
+        endif ()
+
         target_include_directories(melatonin-demorunner PRIVATE
-            "${MELATONIN_DEMORUNNER_SOURCE_DIR}/Source")
+            "${MELATONIN_DEMORUNNER_SOURCE_DIR}/Source"
+            "${MELATONIN_DEMORUNNER_SOURCE_DIR}/Source/Demos")
 
         target_compile_definitions(melatonin-demorunner PRIVATE
             MELATONIN_INSPECTOR_ENABLE_AUTOMATION=1
@@ -158,6 +187,7 @@ if (MelatoninInspector_IS_TOP_LEVEL)
             JUCE_USE_CURL=1
             JUCE_USE_MP3AUDIOFORMAT=1
             JUCE_WEB_BROWSER=1
+            MELATONIN_DEMORUNNER_SKIP_AUDIO_DEVICE_INITIALISE=1
             JUCE_SILENCE_XCODE_15_LINKER_WARNING=1)
 
         target_link_libraries(melatonin-demorunner PRIVATE

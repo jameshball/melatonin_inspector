@@ -1,5 +1,6 @@
 #include <JuceHeader.h>
 
+#include <functional>
 #include <iostream>
 #include <stdexcept>
 
@@ -103,26 +104,42 @@ namespace
 
             runMcpSmoke();
 
-            runCli ({ "-s", sessionName, "click", "--role", "button", "--name", "Browse Demos" });
-            juce::Thread::sleep (500);
-            runCli ({ "-s", sessionName, "wait-for-locator", "--role", "listItem", "--name", "GUI", "--timeout-ms", "2000" });
-            runCli ({ "-s", sessionName, "select-option", "--role", "list", "--exact", "--text", "GUI" });
-            juce::Thread::sleep (250);
-            captureScreenshot ("side-panel.png");
+            openDemosPanel();
+            clickVisibleListItem ("GUI");
+            runCli ({ "-s", sessionName, "wait-for-locator", "--role", "listItem", "--name", "AccessibilityDemo.h", "--exact", "--timeout-ms", "3000" });
+            captureScreenshot ("gui-category.png");
 
-            runCli ({ "-s", sessionName, "click-xy", "70", "20" });
-            juce::Thread::sleep (500);
-            runCli ({ "-s", sessionName, "wait-for-text", "Graphics", "--timeout-ms", "2000" });
+            clickVisibleListItem ("AccessibilityDemo.h");
+            runCli ({ "-s", sessionName, "wait-for-text", "Accessibility Demo", "--timeout-ms", "3000" });
+            captureScreenshot ("accessibility-demo.png");
+            exerciseAccessibilityDemo();
+
+            selectTopLevelTab ("Code");
+            runCli ({ "-s", sessionName, "wait-for-text", "CodeContent", "--timeout-ms", "3000" });
+            captureScreenshot ("accessibility-code.png");
+
+            selectTopLevelTab ("Demo");
+            runCli ({ "-s", sessionName, "wait-for-text", "Accessibility Demo", "--timeout-ms", "3000" });
+
+            openDemosPanel();
+            clickVisibleListItem ("FlexBoxDemo.h");
+            runCli ({ "-s", sessionName, "wait-for-text", "flex-grow", "--timeout-ms", "3000" });
+            captureScreenshot ("flexbox-demo.png");
+            exerciseFlexBoxDemo();
+
+            selectTopLevelTab ("Settings");
+            runCli ({ "-s", sessionName, "wait-for-text", "LookAndFeel:", "--timeout-ms", "3000" });
             captureScreenshot ("settings.png");
+            exerciseSettings();
 
-            runCli ({ "-s", sessionName, "click-xy", "30", "20" });
-            juce::Thread::sleep (500);
-            runCli ({ "-s", sessionName, "wait-for-text", "JUCE Logo", "--timeout-ms", "2000" });
+            openDemosPanel();
+            runCli ({ "-s", sessionName, "click", "--role", "button", "--name", "Home", "--exact" });
+            runCli ({ "-s", sessionName, "wait-for-text", "JUCE Logo", "--timeout-ms", "3000" });
             captureScreenshot ("home.png");
 
             auto traceStop = juce::JSON::parse (runCli ({ "-s", sessionName, "trace-stop" }));
             auto& traceStopObject = asObject (traceStop, "trace-stop");
-            require ((int) traceStopObject.getProperty ("events") >= 4, "DemoRunner trace did not record enough events");
+            require ((int) traceStopObject.getProperty ("events") >= 20, "DemoRunner trace did not record enough events");
             copyEvidenceFile (traceStopObject.getProperty ("trace").toString(), "demorunner-trace.json");
         }
 
@@ -207,7 +224,16 @@ namespace
 
         juce::String runCli (std::initializer_list<juce::String> args)
         {
-            auto result = runProcess (makeCliCommand (args), "melatonin-ui " + makeArgs (args).joinIntoString (" "), true, 15000);
+            return runCli (makeArgs (args));
+        }
+
+        juce::String runCli (juce::StringArray args)
+        {
+            juce::StringArray command;
+            command.add (cliPath.getFullPathName());
+            command.addArray (args);
+
+            auto result = runProcess (command, "melatonin-ui " + args.joinIntoString (" "), true, 15000);
             return result.output.trim();
         }
 
@@ -253,8 +279,164 @@ namespace
             return result;
         }
 
+        juce::var readSnapshot (int depth = 4)
+        {
+            auto parsed = juce::JSON::parse (runCli ({ "-s", sessionName, "snapshot", "--format", "json", "--depth", juce::String (depth) }));
+            asObject (parsed, "snapshot");
+            return parsed;
+        }
+
+        juce::var readLocator (std::initializer_list<juce::String> locatorArgs)
+        {
+            auto args = makeArgs ({ "-s", sessionName, "locator", "--format", "json" });
+            args.addArray (makeArgs (locatorArgs));
+
+            auto parsed = juce::JSON::parse (runCli (args));
+            asObject (parsed, "locator");
+            return parsed;
+        }
+
+        static juce::var findNode (const juce::var& node, const std::function<bool (juce::DynamicObject&)>& predicate)
+        {
+            auto* object = node.getDynamicObject();
+
+            if (object == nullptr)
+                return {};
+
+            if (predicate (*object))
+                return node;
+
+            auto children = object->getProperty ("children");
+
+            if (children.isArray())
+                for (const auto& child : *children.getArray())
+                    if (auto found = findNode (child, predicate); ! found.isVoid())
+                        return found;
+
+            return {};
+        }
+
+        static juce::var findSnapshotNode (const juce::var& snapshot,
+                                           const juce::String& label,
+                                           const std::function<bool (juce::DynamicObject&)>& predicate)
+        {
+            auto tree = asObject (snapshot, "snapshot").getProperty ("tree");
+            auto found = findNode (tree, predicate);
+            require (! found.isVoid(), "Could not find DemoRunner node: " + label);
+            return found;
+        }
+
+        static juce::String nodeString (const juce::var& node, const juce::Identifier& property)
+        {
+            return asObject (node, "node").getProperty (property).toString();
+        }
+
+        static juce::String nodeRef (const juce::var& node)
+        {
+            return nodeString (node, "ref");
+        }
+
+        static bool isVisible (juce::DynamicObject& node)
+        {
+            return (bool) node.getProperty ("visible");
+        }
+
+        static bool hasClass (juce::DynamicObject& node, const juce::String& className)
+        {
+            return node.getProperty ("class").toString().contains (className);
+        }
+
+        juce::var visibleNodeByClassAndName (const juce::var& snapshot, const juce::String& className, const juce::String& name)
+        {
+            return findSnapshotNode (snapshot, className + "=" + name, [&] (juce::DynamicObject& node) {
+                return isVisible (node)
+                       && hasClass (node, className)
+                       && node.getProperty ("name").toString() == name;
+            });
+        }
+
+        juce::var topLevelTabs (const juce::var& snapshot)
+        {
+            return findSnapshotNode (snapshot, "DemoContentComponent", [] (juce::DynamicObject& node) {
+                return isVisible (node) && hasClass (node, "DemoContentComponent");
+            });
+        }
+
+        void selectTopLevelTab (const juce::String& tabName)
+        {
+            auto tabs = topLevelTabs (readSnapshot());
+            runCli ({ "-s", sessionName, "select-tab", nodeRef (tabs), "--name", tabName });
+            juce::Thread::sleep (250);
+        }
+
+        void openDemosPanel()
+        {
+            runCli ({ "-s", sessionName, "click", "--role", "button", "--name", "Browse Demos", "--exact", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "wait-for-locator", "--role", "list", "--visible", "--timeout-ms", "3000" });
+            juce::Thread::sleep (250);
+        }
+
+        void clickVisibleListItem (const juce::String& name)
+        {
+            runCli ({ "-s", sessionName, "wait-for-locator", "--role", "listItem", "--name", name, "--exact", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "click", "--role", "listItem", "--name", name, "--exact", "--timeout-ms", "3000" });
+            juce::Thread::sleep (500);
+        }
+
+        void exerciseAccessibilityDemo()
+        {
+            auto snapshot = readSnapshot();
+            auto demoTabs = visibleNodeByClassAndName (snapshot, "juce::TabbedComponent", "Demo tabs");
+            auto tabNames = asObject (demoTabs, "Demo tabs").getProperty ("tabNames");
+            require (tabNames.isArray() && tabNames.getArray()->size() >= 2, "Accessibility demo tabs did not expose tab names");
+
+            runCli ({ "-s", sessionName, "click", "--role", "button", "--name", "Press me!", "--exact" });
+
+            runCli ({ "-s", sessionName, "check", "--role", "radioButton", "--name", "Button 2", "--exact" });
+            runCli ({ "-s", sessionName, "wait-for-value", "--role", "radioButton", "--name", "Button 2", "--exact", "--value", "true", "--timeout-ms", "3000" });
+
+            runCli ({ "-s", sessionName, "set-value", "--role", "slider", "--nth", "0", "42" });
+            runCli ({ "-s", sessionName, "wait-for-value", "--role", "slider", "--nth", "0", "--value", "42", "--timeout-ms", "3000" });
+
+            demoTabs = visibleNodeByClassAndName (readSnapshot(), "juce::TabbedComponent", "Demo tabs");
+            runCli ({ "-s", sessionName, "select-tab", nodeRef (demoTabs), "--name", "Custom Widget" });
+            runCli ({ "-s", sessionName, "wait-for-text", "Description", "--timeout-ms", "3000" });
+            captureScreenshot ("accessibility-custom-widget.png");
+
+            runCli ({ "-s", sessionName, "fill", "--role", "editableText", "--value", "Custom", "--exact", "Automation Custom" });
+            require ((int) asObject (readLocator ({ "--role", "editableText", "--value", "Automation Custom", "--exact" }),
+                                     "Automation Custom locator").getProperty ("count") >= 1,
+                     "Accessibility custom widget title editor did not update");
+        }
+
+        void exerciseFlexBoxDemo()
+        {
+            runCli ({ "-s", sessionName, "check", "--role", "radioButton", "--name", "column", "--exact" });
+            runCli ({ "-s", sessionName, "wait-for-value", "--role", "radioButton", "--name", "column", "--exact", "--value", "true", "--timeout-ms", "3000" });
+
+            runCli ({ "-s", sessionName, "fill", "--role", "editableText", "--value", "1", "--exact", "--nth", "0", "2" });
+            require ((int) asObject (readLocator ({ "--role", "editableText", "--value", "2", "--exact" }),
+                                     "FlexBox editor locator").getProperty ("count") >= 1,
+                     "FlexBox flex-grow editor did not update");
+
+            runCli ({ "-s", sessionName, "select-option", "--role", "comboBox", "--value", "stretch", "--exact", "--nth", "0", "--text", "center" });
+            require ((int) asObject (readLocator ({ "--role", "comboBox", "--value", "center", "--exact" }),
+                                     "FlexBox combo locator").getProperty ("count") >= 1,
+                     "FlexBox align-self combo did not update");
+        }
+
+        void exerciseSettings()
+        {
+            runCli ({ "-s", sessionName, "select-option", "--role", "comboBox", "--value", "LookAndFeel_V4 (Dark)", "--exact", "--text", "LookAndFeel_V4 (Light)" });
+            require ((int) asObject (readLocator ({ "--role", "comboBox", "--value", "LookAndFeel_V4 (Light)", "--exact" }),
+                                     "Settings LookAndFeel locator").getProperty ("count") >= 1,
+                     "Settings LookAndFeel combo did not update");
+            captureScreenshot ("settings-light.png");
+        }
+
         void captureScreenshot (const juce::String& name)
         {
+            runCli ({ "-s", sessionName, "wait", "--ms", "250" });
             auto outputPath = runCli ({ "-s", sessionName, "screenshot", "--target", "root", "--file", name, "--no-base64" });
             auto screenshot = juce::File (outputPath);
             require (screenshot.existsAsFile() && screenshot.getSize() > 1000,
