@@ -264,6 +264,12 @@ namespace melatonin
         static bool isAutoWaitMethod (const juce::String& method)
         {
             return method == "click"
+                   || method == "hover"
+                   || method == "mouse_move"
+                   || method == "mouse_down"
+                   || method == "mouse_up"
+                   || method == "wheel"
+                   || method == "drag_xy"
                    || method == "type"
                    || method == "fill"
                    || method == "press"
@@ -322,6 +328,21 @@ namespace melatonin
             if (method == "click_xy")
                 return clickXY (params);
 
+            if (method == "hover" || method == "mouse_move")
+                return mouseMove (params);
+
+            if (method == "mouse_down")
+                return mouseButton (params, true);
+
+            if (method == "mouse_up")
+                return mouseButton (params, false);
+
+            if (method == "wheel")
+                return wheel (params);
+
+            if (method == "drag_xy")
+                return dragXY (params);
+
             if (method == "type")
                 return typeText (params);
 
@@ -368,7 +389,7 @@ namespace melatonin
                              { "features", object ({ { "locators", true },
                                                      { "actionability", true },
                                                      { "semanticControls", true },
-                                                     { "richInput", false },
+                                                     { "richInput", true },
                                                      { "screenshots", true },
                                                      { "tracing", false },
                                                      { "windows", false } }) },
@@ -583,6 +604,68 @@ namespace melatonin
             }
 
             return snapshotAfterAction();
+        }
+
+        juce::var mouseMove (juce::DynamicObject& params)
+        {
+            if (!options.allowInput)
+                return error ("input_disabled", "Automation input is disabled for this session.");
+
+            sendPeerMouseEvent (pointFromParams (params, "x", "y"), juce::ModifierKeys(), 0.0f);
+            return snapshotAfterAction();
+        }
+
+        juce::var mouseButton (juce::DynamicObject& params, bool isDown)
+        {
+            if (!options.allowInput)
+                return error ("input_disabled", "Automation input is disabled for this session.");
+
+            sendPeerMouseEvent (pointFromParams (params, "x", "y"),
+                                isDown ? juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier) : juce::ModifierKeys(),
+                                isDown ? 1.0f : 0.0f);
+            return snapshotAfterAction();
+        }
+
+        juce::var wheel (juce::DynamicObject& params)
+        {
+            if (!options.allowInput)
+                return error ("input_disabled", "Automation input is disabled for this session.");
+
+            if (auto* peer = getRootPeer())
+            {
+                juce::MouseWheelDetails details;
+                details.deltaX = (float) params.getProperty ("deltaX");
+                details.deltaY = (float) params.getProperty ("deltaY");
+                details.isReversed = (bool) params.getProperty ("isReversed");
+                details.isSmooth = true;
+
+                peer->handleMouseWheel (juce::MouseInputSource::InputSourceType::mouse,
+                                        peer->getComponent().getLocalPoint (root.getComponent(), pointFromParams (params, "x", "y")).toFloat(),
+                                        juce::Time::currentTimeMillis(),
+                                        details);
+            }
+
+            return snapshotAfterAction();
+        }
+
+        juce::var dragXY (juce::DynamicObject& params)
+        {
+            if (!options.allowInput)
+                return error ("input_disabled", "Automation input is disabled for this session.");
+
+            if (root == nullptr)
+                return error ("no_root", "No root component is attached.");
+
+            auto start = pointFromParams (params, "x", "y");
+            auto end = pointFromParams (params, "toX", "toY");
+
+            if (auto* target = findComponentAt (*root, start))
+            {
+                synthesizeDragOn (*target, start, end);
+                return snapshotAfterAction();
+            }
+
+            return error ("locator_not_found", "No component was found at the drag start point.");
         }
 
         juce::var typeText (juce::DynamicObject& params)
@@ -1416,6 +1499,28 @@ namespace melatonin
                 peer->handleMouseEvent (juce::MouseInputSource::InputSourceType::mouse, peerPoint, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0.0f, now + 1);
                 peer->handleMouseEvent (juce::MouseInputSource::InputSourceType::mouse, peerPoint, juce::ModifierKeys(), 0.0f, 0.0f, now + 2);
             }
+        }
+
+        void sendPeerMouseEvent (juce::Point<int> rootPoint, juce::ModifierKeys modifiers, float pressure)
+        {
+            if (root == nullptr)
+                return;
+
+            if (auto* peer = getRootPeer())
+            {
+                auto peerPoint = peer->getComponent().getLocalPoint (root, rootPoint).toFloat();
+                peer->handleMouseEvent (juce::MouseInputSource::InputSourceType::mouse,
+                                        peerPoint,
+                                        modifiers,
+                                        pressure,
+                                        0.0f,
+                                        juce::Time::currentTimeMillis());
+            }
+        }
+
+        static juce::Point<int> pointFromParams (juce::DynamicObject& params, const juce::Identifier& xName, const juce::Identifier& yName)
+        {
+            return { getInt (params, xName, 0), getInt (params, yName, 0) };
         }
 
         juce::Rectangle<int> getRootBounds (juce::Component& component) const

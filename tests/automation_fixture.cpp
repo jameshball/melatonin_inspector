@@ -455,6 +455,22 @@ namespace
             require (dragBoxAfterBounds.getY() == dragBoxBeforeBounds.getY() + 15, "drag did not move Drag Box on the y axis");
             assertStatus (snapshot, "Status: DragBox");
 
+            runCli ({ "-s", sessionName, "hover", juce::String (dragBoxAfterBounds.getCentreX()), juce::String (dragBoxAfterBounds.getCentreY()) });
+            runCli ({ "-s", sessionName, "mouse-down", juce::String (dragBoxAfterBounds.getCentreX()), juce::String (dragBoxAfterBounds.getCentreY()) });
+            runCli ({ "-s", sessionName, "mouse-up", juce::String (dragBoxAfterBounds.getCentreX()), juce::String (dragBoxAfterBounds.getCentreY()) });
+            runCli ({ "-s", sessionName, "wheel", juce::String (dragBoxAfterBounds.getCentreX()), juce::String (dragBoxAfterBounds.getCentreY()), "--dy", "-1" });
+            runCli ({ "-s",
+                      sessionName,
+                      "drag-xy",
+                      juce::String (dragBoxAfterBounds.getCentreX()),
+                      juce::String (dragBoxAfterBounds.getCentreY()),
+                      juce::String (dragBoxAfterBounds.getCentreX() + 20),
+                      juce::String (dragBoxAfterBounds.getCentreY() + 10) });
+            snapshot = readSnapshot();
+            auto dragBoxPointDragBounds = boundsOf (findByComponentName (snapshot, "advanced.dragBox"));
+            require (dragBoxPointDragBounds.getX() == dragBoxAfterBounds.getX() + 20, "drag-xy did not move Drag Box on the x axis");
+            require (dragBoxPointDragBounds.getY() == dragBoxAfterBounds.getY() + 10, "drag-xy did not move Drag Box on the y axis");
+
             auto resetRef = refByComponentName (snapshot, "advanced.reset");
             runCli ({ "-s", sessionName, "set-bounds", resetRef, "--x", "20", "--y", "24", "--w", "180", "--h", "34" });
             snapshot = readSnapshot();

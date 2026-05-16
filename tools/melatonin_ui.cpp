@@ -388,6 +388,24 @@ namespace
             tool ("juce_click_xy",
                   "Click root-local coordinates and return a fresh snapshot.",
                   toolSchema ({ { "session", stringSchema() }, { "x", numberSchema() }, { "y", numberSchema() } }, { "x", "y" })),
+            tool ("juce_hover",
+                  "Move the mouse to root-local coordinates.",
+                  toolSchema ({ { "session", stringSchema() }, { "x", numberSchema() }, { "y", numberSchema() } }, { "x", "y" })),
+            tool ("juce_mouse_move",
+                  "Move the mouse to root-local coordinates.",
+                  toolSchema ({ { "session", stringSchema() }, { "x", numberSchema() }, { "y", numberSchema() } }, { "x", "y" })),
+            tool ("juce_mouse_down",
+                  "Send a mouse-down event at root-local coordinates.",
+                  toolSchema ({ { "session", stringSchema() }, { "x", numberSchema() }, { "y", numberSchema() } }, { "x", "y" })),
+            tool ("juce_mouse_up",
+                  "Send a mouse-up event at root-local coordinates.",
+                  toolSchema ({ { "session", stringSchema() }, { "x", numberSchema() }, { "y", numberSchema() } }, { "x", "y" })),
+            tool ("juce_wheel",
+                  "Send a mouse wheel event at root-local coordinates.",
+                  toolSchema ({ { "session", stringSchema() }, { "x", numberSchema() }, { "y", numberSchema() }, { "deltaX", numberSchema() }, { "deltaY", numberSchema() } }, { "x", "y" })),
+            tool ("juce_drag_xy",
+                  "Drag from one root-local point to another.",
+                  toolSchema ({ { "session", stringSchema() }, { "x", numberSchema() }, { "y", numberSchema() }, { "toX", numberSchema() }, { "toY", numberSchema() } }, { "x", "y", "toX", "toY" })),
             tool ("juce_type",
                   "Type text into a component ref and return a fresh snapshot.",
                   toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "text", stringSchema() } }, { "text" })),
@@ -442,6 +460,12 @@ namespace
         if (name == "juce_screenshot") return "screenshot";
         if (name == "juce_click") return "click";
         if (name == "juce_click_xy") return "click_xy";
+        if (name == "juce_hover") return "hover";
+        if (name == "juce_mouse_move") return "mouse_move";
+        if (name == "juce_mouse_down") return "mouse_down";
+        if (name == "juce_mouse_up") return "mouse_up";
+        if (name == "juce_wheel") return "wheel";
+        if (name == "juce_drag_xy") return "drag_xy";
         if (name == "juce_type") return "type";
         if (name == "juce_fill") return "fill";
         if (name == "juce_press") return "press";
@@ -666,6 +690,11 @@ namespace
             << "  melatonin-ui -s <session> screenshot [--target root|--ref m1-1] --file /tmp/root.png\n"
             << "  melatonin-ui -s <session> click <ref>\n"
             << "  melatonin-ui -s <session> click-xy <x> <y>\n"
+            << "  melatonin-ui -s <session> hover <x> <y>\n"
+            << "  melatonin-ui -s <session> mouse-down <x> <y>\n"
+            << "  melatonin-ui -s <session> mouse-up <x> <y>\n"
+            << "  melatonin-ui -s <session> wheel <x> <y> --dy amount\n"
+            << "  melatonin-ui -s <session> drag-xy <x> <y> <toX> <toY>\n"
             << "  melatonin-ui -s <session> type <ref> <text>\n"
             << "  melatonin-ui -s <session> fill <ref> <text>\n"
             << "  melatonin-ui -s <session> check <ref>\n"
@@ -801,6 +830,35 @@ int main (int argc, char* argv[])
         if (command == "click-xy" && args.size() >= 2)
         {
             printResult (request (*sessionObject, "click_xy", object ({ { "x", args[0].getIntValue() }, { "y", args[1].getIntValue() } })));
+            return 0;
+        }
+
+        if ((command == "hover" || command == "mouse-move") && args.size() >= 2)
+        {
+            printResult (request (*sessionObject, command == "hover" ? "hover" : "mouse_move", object ({ { "x", args[0].getIntValue() }, { "y", args[1].getIntValue() } })));
+            return 0;
+        }
+
+        if ((command == "mouse-down" || command == "mouse-up") && args.size() >= 2)
+        {
+            printResult (request (*sessionObject, command == "mouse-down" ? "mouse_down" : "mouse_up", object ({ { "x", args[0].getIntValue() }, { "y", args[1].getIntValue() } })));
+            return 0;
+        }
+
+        if (command == "wheel" && args.size() >= 2)
+        {
+            auto dx = optionValue (args, "--dx", "0").getDoubleValue();
+            auto dy = optionValue (args, "--dy", "0").getDoubleValue();
+            printResult (request (*sessionObject, "wheel", object ({ { "x", args[0].getIntValue() }, { "y", args[1].getIntValue() }, { "deltaX", dx }, { "deltaY", dy } })));
+            return 0;
+        }
+
+        if (command == "drag-xy" && args.size() >= 4)
+        {
+            printResult (request (*sessionObject, "drag_xy", object ({ { "x", args[0].getIntValue() },
+                                                                       { "y", args[1].getIntValue() },
+                                                                       { "toX", args[2].getIntValue() },
+                                                                       { "toY", args[3].getIntValue() } })));
             return 0;
         }
 
