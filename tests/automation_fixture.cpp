@@ -376,6 +376,28 @@ namespace
                      "click-xy did not toggle the power button");
             assertStatus (snapshot, "Status: Power On");
 
+            runCli ({ "-s", sessionName, "uncheck", "--component-id", "controls.power" });
+            snapshot = readSnapshot();
+            require (! (bool) asObject (findByComponentName (snapshot, "controls.power"), "controls.power").getProperty ("toggleState"),
+                     "semantic uncheck did not clear the power button");
+
+            runCli ({ "-s", sessionName, "check", "--component-id", "controls.power" });
+            snapshot = readSnapshot();
+            require ((bool) asObject (findByComponentName (snapshot, "controls.power"), "controls.power").getProperty ("toggleState"),
+                     "semantic check did not set the power button");
+            assertStatus (snapshot, "Status: Power On");
+
+            runCli ({ "-s", sessionName, "set-value", "--component-id", "controls.slider", "44" });
+            snapshot = readSnapshot();
+            require (juce::roundToInt (valueOf (findByComponentName (snapshot, "controls.slider"))) == 44,
+                     "semantic set-value did not update the slider");
+            assertStatus (snapshot, "Status: Slider 44");
+
+            runCli ({ "-s", sessionName, "select-option", "--component-id", "controls.combo", "--text", "Beta" });
+            snapshot = readSnapshot();
+            require (asObject (findByComponentName (snapshot, "controls.combo"), "controls.combo").getProperty ("value").toString() == "Beta",
+                     "semantic select-option did not select Beta");
+
             auto sliderBefore = valueOf (findByComponentName (snapshot, "controls.slider"));
             dragRef (refByComponentName (snapshot, "controls.slider"), 90, 0);
             snapshot = readSnapshot();
@@ -389,7 +411,16 @@ namespace
             assertStatus (snapshot, "Status: Editor");
             require (!findByComponentName (snapshot, "editor.text").isVoid(), "editor page did not expose its text editor");
 
+            runCli ({ "-s", sessionName, "fill", "--component-id", "editor.text", "semantic fill" });
+            snapshot = readSnapshot();
+            clickRef (refByComponentName (snapshot, "editor.apply"));
+            snapshot = readSnapshot();
+            assertStatus (snapshot, "Status: Applied semantic fill");
+
             auto editorRef = refByComponentName (snapshot, "editor.text");
+            runCli ({ "-s", sessionName, "fill", editorRef, "" });
+            snapshot = readSnapshot();
+            editorRef = refByComponentName (snapshot, "editor.text");
             typeRef (editorRef, "hello from automation");
             snapshot = readSnapshot();
             pressRef (refByComponentName (snapshot, "editor.text"), "!");
@@ -409,7 +440,7 @@ namespace
             assertStatus (snapshot, "Status: Advanced");
             require (!findByComponentName (snapshot, "advanced.tabs").isVoid(), "advanced page did not expose nested tabs");
 
-            clickRef (refByComponentName (snapshot, "advanced.goActions"));
+            runCli ({ "-s", sessionName, "select-tab", "--component-id", "advanced.tabs", "--name", "Actions" });
             snapshot = readSnapshot();
             assertStatus (snapshot, "Status: Nested Actions");
             require (!findByComponentName (snapshot, "advanced.reset").isVoid(), "nested Actions tab did not expose Reset All");

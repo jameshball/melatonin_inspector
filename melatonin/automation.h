@@ -265,7 +265,13 @@ namespace melatonin
         {
             return method == "click"
                    || method == "type"
+                   || method == "fill"
                    || method == "press"
+                   || method == "check"
+                   || method == "uncheck"
+                   || method == "set_value"
+                   || method == "select_option"
+                   || method == "select_tab"
                    || method == "drag"
                    || method == "screenshot"
                    || method == "set_bounds"
@@ -319,8 +325,26 @@ namespace melatonin
             if (method == "type")
                 return typeText (params);
 
+            if (method == "fill")
+                return fill (params);
+
             if (method == "press")
                 return pressKey (params);
+
+            if (method == "check")
+                return check (params, true);
+
+            if (method == "uncheck")
+                return check (params, false);
+
+            if (method == "set_value")
+                return setValue (params);
+
+            if (method == "select_option")
+                return selectOption (params);
+
+            if (method == "select_tab")
+                return selectTab (params);
 
             if (method == "drag")
                 return drag (params);
@@ -343,7 +367,7 @@ namespace melatonin
                              { "session", options.sessionName },
                              { "features", object ({ { "locators", true },
                                                      { "actionability", true },
-                                                     { "semanticControls", false },
+                                                     { "semanticControls", true },
                                                      { "richInput", false },
                                                      { "screenshots", true },
                                                      { "tracing", false },
@@ -597,6 +621,202 @@ namespace melatonin
             }
 
             return snapshotAfterAction();
+        }
+
+        juce::var fill (juce::DynamicObject& params)
+        {
+            if (!options.allowInput)
+                return error ("input_disabled", "Automation input is disabled for this session.");
+
+            auto resolution = resolveTarget (params, true, true);
+
+            if (!resolution.error.isVoid())
+                return resolution.error;
+
+            auto* target = resolution.component;
+
+            if (auto validationError = validateInputTarget (*target, params); !validationError.isVoid())
+                return validationError;
+
+            if (isTrial (params))
+                return actionabilityResult (*target);
+
+            const auto text = getString (params, "text", {});
+
+            if (auto* editor = dynamic_cast<juce::TextEditor*> (target))
+            {
+                editor->setText (text, juce::sendNotification);
+                return snapshotAfterAction();
+            }
+
+            if (auto* label = dynamic_cast<juce::Label*> (target))
+            {
+                label->setText (text, juce::sendNotification);
+                return snapshotAfterAction();
+            }
+
+            return error ("target_not_editable", "Target component does not support semantic fill.");
+        }
+
+        juce::var check (juce::DynamicObject& params, bool shouldBeChecked)
+        {
+            if (!options.allowInput)
+                return error ("input_disabled", "Automation input is disabled for this session.");
+
+            auto resolution = resolveTarget (params, true, true);
+
+            if (!resolution.error.isVoid())
+                return resolution.error;
+
+            auto* target = resolution.component;
+
+            if (auto validationError = validateInputTarget (*target, params); !validationError.isVoid())
+                return validationError;
+
+            if (isTrial (params))
+                return actionabilityResult (*target);
+
+            if (auto* button = dynamic_cast<juce::Button*> (target))
+            {
+                if (!button->isToggleable())
+                    return error ("target_not_toggleable", "Target button is not toggleable.");
+
+                button->setToggleState (shouldBeChecked, juce::sendNotification);
+                return snapshotAfterAction();
+            }
+
+            return error ("target_not_toggleable", "Target component does not support check/uncheck.");
+        }
+
+        juce::var setValue (juce::DynamicObject& params)
+        {
+            if (!options.allowInput)
+                return error ("input_disabled", "Automation input is disabled for this session.");
+
+            auto resolution = resolveTarget (params, true, true);
+
+            if (!resolution.error.isVoid())
+                return resolution.error;
+
+            auto* target = resolution.component;
+
+            if (auto validationError = validateInputTarget (*target, params); !validationError.isVoid())
+                return validationError;
+
+            if (isTrial (params))
+                return actionabilityResult (*target);
+
+            if (auto* slider = dynamic_cast<juce::Slider*> (target))
+            {
+                slider->setValue ((double) params.getProperty ("value"), juce::sendNotificationSync);
+                return snapshotAfterAction();
+            }
+
+            if (auto* editor = dynamic_cast<juce::TextEditor*> (target))
+            {
+                editor->setText (params.getProperty ("value").toString(), juce::sendNotification);
+                return snapshotAfterAction();
+            }
+
+            return error ("target_no_value", "Target component does not support semantic set_value.");
+        }
+
+        juce::var selectOption (juce::DynamicObject& params)
+        {
+            if (!options.allowInput)
+                return error ("input_disabled", "Automation input is disabled for this session.");
+
+            auto resolution = resolveTarget (params, true, true);
+
+            if (!resolution.error.isVoid())
+                return resolution.error;
+
+            auto* target = resolution.component;
+
+            if (auto validationError = validateInputTarget (*target, params); !validationError.isVoid())
+                return validationError;
+
+            if (isTrial (params))
+                return actionabilityResult (*target);
+
+            auto* combo = dynamic_cast<juce::ComboBox*> (target);
+
+            if (combo == nullptr)
+                return error ("target_not_combo_box", "Target component is not a ComboBox.");
+
+            auto text = getString (params, "text", {});
+
+            if (text.isNotEmpty())
+            {
+                for (int i = 0; i < combo->getNumItems(); ++i)
+                {
+                    if (normalizeForLocator (combo->getItemText (i)) == normalizeForLocator (text))
+                    {
+                        combo->setSelectedItemIndex (i, juce::sendNotificationSync);
+                        return snapshotAfterAction();
+                    }
+                }
+
+                return error ("option_not_found", "ComboBox option not found: " + text);
+            }
+
+            if (!params.getProperty ("index").isVoid())
+            {
+                combo->setSelectedItemIndex ((int) params.getProperty ("index"), juce::sendNotificationSync);
+                return snapshotAfterAction();
+            }
+
+            if (!params.getProperty ("id").isVoid())
+            {
+                combo->setSelectedId ((int) params.getProperty ("id"), juce::sendNotificationSync);
+                return snapshotAfterAction();
+            }
+
+            return error ("invalid_option", "select_option requires text, index, or id.");
+        }
+
+        juce::var selectTab (juce::DynamicObject& params)
+        {
+            if (!options.allowInput)
+                return error ("input_disabled", "Automation input is disabled for this session.");
+
+            auto resolution = resolveTarget (params, true, true);
+
+            if (!resolution.error.isVoid())
+                return resolution.error;
+
+            auto* target = resolution.component;
+
+            if (auto validationError = validateInputTarget (*target, params); !validationError.isVoid())
+                return validationError;
+
+            if (isTrial (params))
+                return actionabilityResult (*target);
+
+            auto* tabs = dynamic_cast<juce::TabbedComponent*> (target);
+
+            if (tabs == nullptr)
+                return error ("target_not_tabbed_component", "Target component is not a TabbedComponent.");
+
+            if (!params.getProperty ("index").isVoid())
+            {
+                tabs->setCurrentTabIndex ((int) params.getProperty ("index"));
+                return snapshotAfterAction();
+            }
+
+            auto name = getString (params, "name", {});
+            auto tabNames = tabs->getTabNames();
+
+            for (int i = 0; i < tabNames.size(); ++i)
+            {
+                if (normalizeForLocator (tabNames[i]) == normalizeForLocator (name))
+                {
+                    tabs->setCurrentTabIndex (i);
+                    return snapshotAfterAction();
+                }
+            }
+
+            return error ("tab_not_found", "TabbedComponent tab not found: " + name);
         }
 
         juce::var pressKey (juce::DynamicObject& params)

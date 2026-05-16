@@ -391,9 +391,27 @@ namespace
             tool ("juce_type",
                   "Type text into a component ref and return a fresh snapshot.",
                   toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "text", stringSchema() } }, { "text" })),
+            tool ("juce_fill",
+                  "Replace text in a TextEditor or Label.",
+                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "text", stringSchema() } }, { "text" })),
             tool ("juce_press",
                   "Press a key and return a fresh snapshot.",
                   toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "key", stringSchema() } }, { "key" })),
+            tool ("juce_check",
+                  "Set a toggleable button checked.",
+                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() } })),
+            tool ("juce_uncheck",
+                  "Set a toggleable button unchecked.",
+                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() } })),
+            tool ("juce_set_value",
+                  "Set a semantic value on a Slider or TextEditor.",
+                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "value", numberSchema() } }, { "value" })),
+            tool ("juce_select_option",
+                  "Select a ComboBox option by text, index, or id.",
+                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "text", stringSchema() }, { "index", numberSchema() }, { "id", numberSchema() } })),
+            tool ("juce_select_tab",
+                  "Select a TabbedComponent tab by name or index.",
+                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "name", stringSchema() }, { "index", numberSchema() } })),
             tool ("juce_drag",
                   "Drag a component by a delta and return a fresh snapshot.",
                   toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "dx", numberSchema() }, { "dy", numberSchema() } })),
@@ -425,7 +443,13 @@ namespace
         if (name == "juce_click") return "click";
         if (name == "juce_click_xy") return "click_xy";
         if (name == "juce_type") return "type";
+        if (name == "juce_fill") return "fill";
         if (name == "juce_press") return "press";
+        if (name == "juce_check") return "check";
+        if (name == "juce_uncheck") return "uncheck";
+        if (name == "juce_set_value") return "set_value";
+        if (name == "juce_select_option") return "select_option";
+        if (name == "juce_select_tab") return "select_tab";
         if (name == "juce_drag") return "drag";
         if (name == "juce_set_bounds") return "set_bounds";
         if (name == "juce_set_property") return "set_property";
@@ -643,6 +667,12 @@ namespace
             << "  melatonin-ui -s <session> click <ref>\n"
             << "  melatonin-ui -s <session> click-xy <x> <y>\n"
             << "  melatonin-ui -s <session> type <ref> <text>\n"
+            << "  melatonin-ui -s <session> fill <ref> <text>\n"
+            << "  melatonin-ui -s <session> check <ref>\n"
+            << "  melatonin-ui -s <session> uncheck <ref>\n"
+            << "  melatonin-ui -s <session> set-value <ref> <value>\n"
+            << "  melatonin-ui -s <session> select-option <ref> --text name|--index n|--id n\n"
+            << "  melatonin-ui -s <session> select-tab <ref> --name tab|--index n\n"
             << "  melatonin-ui -s <session> press <key> [--ref m1]\n"
             << "  melatonin-ui -s <session> drag <ref> --dx n --dy n\n"
             << "  melatonin-ui -s <session> set-bounds <ref> --x n --y n --w n --h n\n"
@@ -786,6 +816,100 @@ int main (int argc, char* argv[])
             params.getDynamicObject()->setProperty ("trial", tempParams.getProperty ("trial"));
             addLocatorIfPresent (*params.getDynamicObject(), locator);
             printResult (request (*sessionObject, "type", params));
+            return 0;
+        }
+
+        if (command == "fill")
+        {
+            juce::DynamicObject tempParams;
+            addActionOptions (args, tempParams);
+            auto locator = parseLocatorOptions (args);
+            auto ref = !locator.isVoid() ? juce::String() : popFront (args);
+            auto params = object ({ { "ref", ref }, { "text", args.joinIntoString (" ") } });
+            params.getDynamicObject()->setProperty ("timeoutMs", tempParams.getProperty ("timeoutMs"));
+            params.getDynamicObject()->setProperty ("force", tempParams.getProperty ("force"));
+            params.getDynamicObject()->setProperty ("trial", tempParams.getProperty ("trial"));
+            addLocatorIfPresent (*params.getDynamicObject(), locator);
+            printResult (request (*sessionObject, "fill", params));
+            return 0;
+        }
+
+        if (command == "check" || command == "uncheck")
+        {
+            juce::DynamicObject tempParams;
+            addActionOptions (args, tempParams);
+            auto locator = parseLocatorOptions (args);
+            auto params = object ({ { "ref", args.size() >= 1 ? args[0] : juce::String() } });
+            params.getDynamicObject()->setProperty ("timeoutMs", tempParams.getProperty ("timeoutMs"));
+            params.getDynamicObject()->setProperty ("force", tempParams.getProperty ("force"));
+            params.getDynamicObject()->setProperty ("trial", tempParams.getProperty ("trial"));
+            addLocatorIfPresent (*params.getDynamicObject(), locator);
+            printResult (request (*sessionObject, command == "check" ? "check" : "uncheck", params));
+            return 0;
+        }
+
+        if (command == "set-value")
+        {
+            juce::DynamicObject tempParams;
+            addActionOptions (args, tempParams);
+            auto locator = parseLocatorOptions (args);
+            auto ref = !locator.isVoid() ? juce::String() : popFront (args);
+
+            if (args.isEmpty())
+                throw std::runtime_error ("set-value requires a value");
+
+            auto params = object ({ { "ref", ref }, { "value", parseValue (args[0]) } });
+            params.getDynamicObject()->setProperty ("timeoutMs", tempParams.getProperty ("timeoutMs"));
+            params.getDynamicObject()->setProperty ("force", tempParams.getProperty ("force"));
+            params.getDynamicObject()->setProperty ("trial", tempParams.getProperty ("trial"));
+            addLocatorIfPresent (*params.getDynamicObject(), locator);
+            printResult (request (*sessionObject, "set_value", params));
+            return 0;
+        }
+
+        if (command == "select-option")
+        {
+            juce::DynamicObject tempParams;
+            addActionOptions (args, tempParams);
+            auto text = optionValue (args, "--text");
+            auto index = optionValue (args, "--index");
+            auto id = optionValue (args, "--id");
+            auto locator = parseLocatorOptions (args);
+            auto params = object ({ { "ref", args.size() >= 1 ? args[0] : juce::String() },
+                                    { "text", text } });
+
+            if (index.isNotEmpty())
+                params.getDynamicObject()->setProperty ("index", index.getIntValue());
+
+            if (id.isNotEmpty())
+                params.getDynamicObject()->setProperty ("id", id.getIntValue());
+
+            params.getDynamicObject()->setProperty ("timeoutMs", tempParams.getProperty ("timeoutMs"));
+            params.getDynamicObject()->setProperty ("force", tempParams.getProperty ("force"));
+            params.getDynamicObject()->setProperty ("trial", tempParams.getProperty ("trial"));
+            addLocatorIfPresent (*params.getDynamicObject(), locator);
+            printResult (request (*sessionObject, "select_option", params));
+            return 0;
+        }
+
+        if (command == "select-tab")
+        {
+            juce::DynamicObject tempParams;
+            addActionOptions (args, tempParams);
+            auto name = optionValue (args, "--name");
+            auto index = optionValue (args, "--index");
+            auto locator = parseLocatorOptions (args);
+            auto params = object ({ { "ref", args.size() >= 1 ? args[0] : juce::String() },
+                                    { "name", name } });
+
+            if (index.isNotEmpty())
+                params.getDynamicObject()->setProperty ("index", index.getIntValue());
+
+            params.getDynamicObject()->setProperty ("timeoutMs", tempParams.getProperty ("timeoutMs"));
+            params.getDynamicObject()->setProperty ("force", tempParams.getProperty ("force"));
+            params.getDynamicObject()->setProperty ("trial", tempParams.getProperty ("trial"));
+            addLocatorIfPresent (*params.getDynamicObject(), locator);
+            printResult (request (*sessionObject, "select_tab", params));
             return 0;
         }
 
