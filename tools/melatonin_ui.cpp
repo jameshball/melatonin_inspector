@@ -434,6 +434,9 @@ namespace
             tool ("juce_fill",
                   "Replace text in a TextEditor or Label.",
                   toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "text", stringSchema() } }, { "text" })),
+            tool ("juce_clear",
+                  "Clear text from a TextEditor or Label.",
+                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() } })),
             tool ("juce_press",
                   "Press a key and return a fresh snapshot.",
                   toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "key", stringSchema() } }, { "key" })),
@@ -449,6 +452,9 @@ namespace
             tool ("juce_uncheck",
                   "Set a toggleable button unchecked.",
                   toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() } })),
+            tool ("juce_set_checked",
+                  "Set a toggleable button checked or unchecked.",
+                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "checked", booleanSchema() } }, { "checked" })),
             tool ("juce_set_value",
                   "Set a semantic value on a Slider or TextEditor.",
                   toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "value", numberSchema() } }, { "value" })),
@@ -513,11 +519,13 @@ namespace
         if (name == "juce_drag_xy") return "drag_xy";
         if (name == "juce_type") return "type";
         if (name == "juce_fill") return "fill";
+        if (name == "juce_clear") return "clear";
         if (name == "juce_press") return "press";
         if (name == "juce_key_down") return "key_down";
         if (name == "juce_key_up") return "key_up";
         if (name == "juce_check") return "check";
         if (name == "juce_uncheck") return "uncheck";
+        if (name == "juce_set_checked") return "set_checked";
         if (name == "juce_set_value") return "set_value";
         if (name == "juce_select_option") return "select_option";
         if (name == "juce_select_tab") return "select_tab";
@@ -757,8 +765,10 @@ namespace
             << "  melatonin-ui -s <session> drag-xy <x> <y> <toX> <toY>\n"
             << "  melatonin-ui -s <session> type <ref> <text>\n"
             << "  melatonin-ui -s <session> fill <ref> <text>\n"
+            << "  melatonin-ui -s <session> clear <ref>\n"
             << "  melatonin-ui -s <session> check <ref>\n"
             << "  melatonin-ui -s <session> uncheck <ref>\n"
+            << "  melatonin-ui -s <session> set-checked <ref> true|false\n"
             << "  melatonin-ui -s <session> set-value <ref> <value>\n"
             << "  melatonin-ui -s <session> select-option <ref> --text name|--index n|--id n\n"
             << "  melatonin-ui -s <session> select-tab <ref> --name tab|--index n\n"
@@ -974,32 +984,44 @@ int main (int argc, char* argv[])
             return 0;
         }
 
-        if (command == "fill")
+        if (command == "fill" || command == "clear")
         {
             juce::DynamicObject tempParams;
             addActionOptions (args, tempParams);
             auto locator = parseLocatorOptions (args);
             auto ref = !locator.isVoid() ? juce::String() : popFront (args);
-            auto params = object ({ { "ref", ref }, { "text", args.joinIntoString (" ") } });
+            auto params = object ({ { "ref", ref }, { "text", command == "fill" ? args.joinIntoString (" ") : juce::String() } });
             params.getDynamicObject()->setProperty ("timeoutMs", tempParams.getProperty ("timeoutMs"));
             params.getDynamicObject()->setProperty ("force", tempParams.getProperty ("force"));
             params.getDynamicObject()->setProperty ("trial", tempParams.getProperty ("trial"));
             addLocatorIfPresent (*params.getDynamicObject(), locator);
-            printResult (request (*sessionObject, "fill", params));
+            printResult (request (*sessionObject, command == "fill" ? "fill" : "clear", params));
             return 0;
         }
 
-        if (command == "check" || command == "uncheck")
+        if (command == "check" || command == "uncheck" || command == "set-checked")
         {
             juce::DynamicObject tempParams;
             addActionOptions (args, tempParams);
             auto locator = parseLocatorOptions (args);
-            auto params = object ({ { "ref", args.size() >= 1 ? args[0] : juce::String() } });
+            auto ref = !locator.isVoid() ? juce::String() : popFront (args);
+            auto params = object ({ { "ref", ref } });
+
+            if (command == "set-checked")
+            {
+                if (args.isEmpty())
+                    throw std::runtime_error ("set-checked requires true or false");
+
+                params.getDynamicObject()->setProperty ("checked", (bool) parseValue (args[0]));
+            }
+
             params.getDynamicObject()->setProperty ("timeoutMs", tempParams.getProperty ("timeoutMs"));
             params.getDynamicObject()->setProperty ("force", tempParams.getProperty ("force"));
             params.getDynamicObject()->setProperty ("trial", tempParams.getProperty ("trial"));
             addLocatorIfPresent (*params.getDynamicObject(), locator);
-            printResult (request (*sessionObject, command == "check" ? "check" : "uncheck", params));
+            printResult (request (*sessionObject,
+                                  command == "check" ? "check" : (command == "uncheck" ? "uncheck" : "set_checked"),
+                                  params));
             return 0;
         }
 

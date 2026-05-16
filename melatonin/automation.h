@@ -386,11 +386,13 @@ namespace melatonin
                    || method == "drag_xy"
                    || method == "type"
                    || method == "fill"
+                   || method == "clear"
                    || method == "press"
                    || method == "key_down"
                    || method == "key_up"
                    || method == "check"
                    || method == "uncheck"
+                   || method == "set_checked"
                    || method == "set_value"
                    || method == "select_option"
                    || method == "select_tab"
@@ -480,6 +482,9 @@ namespace melatonin
             if (method == "fill")
                 return fill (params);
 
+            if (method == "clear")
+                return clear (params);
+
             if (method == "press")
                 return pressKey (params);
 
@@ -494,6 +499,9 @@ namespace melatonin
 
             if (method == "uncheck")
                 return check (params, false);
+
+            if (method == "set_checked")
+                return setChecked (params);
 
             if (method == "set_value")
                 return setValue (params);
@@ -1001,6 +1009,39 @@ namespace melatonin
             return error ("target_not_editable", "Target component does not support semantic fill.");
         }
 
+        juce::var clear (juce::DynamicObject& params)
+        {
+            if (!options.allowInput)
+                return error ("input_disabled", "Automation input is disabled for this session.");
+
+            auto resolution = resolveTarget (params, true, true);
+
+            if (!resolution.error.isVoid())
+                return resolution.error;
+
+            auto* target = resolution.component;
+
+            if (auto validationError = validateInputTarget (*target, params); !validationError.isVoid())
+                return validationError;
+
+            if (isTrial (params))
+                return actionabilityResult (*target);
+
+            if (auto* editor = dynamic_cast<juce::TextEditor*> (target))
+            {
+                editor->clear();
+                return snapshotAfterAction();
+            }
+
+            if (auto* label = dynamic_cast<juce::Label*> (target))
+            {
+                label->setText ({}, juce::sendNotification);
+                return snapshotAfterAction();
+            }
+
+            return error ("target_not_editable", "Target component does not support semantic clear.");
+        }
+
         juce::var check (juce::DynamicObject& params, bool shouldBeChecked)
         {
             if (!options.allowInput)
@@ -1029,6 +1070,14 @@ namespace melatonin
             }
 
             return error ("target_not_toggleable", "Target component does not support check/uncheck.");
+        }
+
+        juce::var setChecked (juce::DynamicObject& params)
+        {
+            if (params.getProperty ("checked").isVoid())
+                return error ("invalid_checked_state", "set_checked requires a checked boolean.");
+
+            return check (params, (bool) params.getProperty ("checked"));
         }
 
         juce::var setValue (juce::DynamicObject& params)

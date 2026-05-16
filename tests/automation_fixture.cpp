@@ -465,6 +465,17 @@ namespace
                      "semantic check did not set the power button");
             assertStatus (snapshot, "Status: Power On");
 
+            runCli ({ "-s", sessionName, "set-checked", "--component-id", "controls.power", "false" });
+            snapshot = readSnapshot();
+            require (! (bool) asObject (findByComponentName (snapshot, "controls.power"), "controls.power").getProperty ("checked"),
+                     "semantic set-checked false did not clear the power button");
+
+            runCli ({ "-s", sessionName, "set-checked", "--component-id", "controls.power", "true" });
+            snapshot = readSnapshot();
+            require ((bool) asObject (findByComponentName (snapshot, "controls.power"), "controls.power").getProperty ("checked"),
+                     "semantic set-checked true did not set the power button");
+            assertStatus (snapshot, "Status: Power On");
+
             runCli ({ "-s", sessionName, "set-value", "--component-id", "controls.slider", "44" });
             snapshot = readSnapshot();
             require (juce::roundToInt (valueOf (findByComponentName (snapshot, "controls.slider"))) == 44,
@@ -511,8 +522,10 @@ namespace
             assertStatus (snapshot, "Status: Applied semantic fill");
 
             auto editorRef = refByComponentName (snapshot, "editor.text");
-            runCli ({ "-s", sessionName, "fill", editorRef, "" });
+            runCli ({ "-s", sessionName, "clear", editorRef });
             snapshot = readSnapshot();
+            require (asObject (findByComponentName (snapshot, "editor.text"), "editor.text").getProperty ("value").toString().isEmpty(),
+                     "semantic clear did not empty the editor");
             editorRef = refByComponentName (snapshot, "editor.text");
             typeRef (editorRef, "hello from automation");
             snapshot = readSnapshot();
@@ -749,6 +762,8 @@ namespace
             bool foundRightClickTool = false;
             bool foundKeyDownTool = false;
             bool foundKeyUpTool = false;
+            bool foundClearTool = false;
+            bool foundSetCheckedTool = false;
 
             for (const auto& toolInfo : *tools.getArray())
             {
@@ -772,6 +787,12 @@ namespace
 
                 if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_key_up")
                     foundKeyUpTool = true;
+
+                if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_clear")
+                    foundClearTool = true;
+
+                if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_set_checked")
+                    foundSetCheckedTool = true;
             }
 
             require (foundSnapshotTool, "MCP tools/list did not expose juce_snapshot");
@@ -781,6 +802,8 @@ namespace
             require (foundRightClickTool, "MCP tools/list did not expose juce_right_click");
             require (foundKeyDownTool, "MCP tools/list did not expose juce_key_down");
             require (foundKeyUpTool, "MCP tools/list did not expose juce_key_up");
+            require (foundClearTool, "MCP tools/list did not expose juce_clear");
+            require (foundSetCheckedTool, "MCP tools/list did not expose juce_set_checked");
 
             auto capabilitiesCallResult = assertMcpResult (parseMcpLine (lines, 2), 3);
             auto& capabilitiesCall = asObject (capabilitiesCallResult, "MCP capabilities result");
