@@ -232,9 +232,11 @@ namespace melatonin
             if (paramsObject == nullptr)
                 paramsObject = &emptyParams;
 
+            const auto startMs = juce::Time::getMillisecondCounterHiRes();
             auto result = dispatchRequest (method, *paramsObject);
+            const auto elapsedMs = juce::Time::getMillisecondCounterHiRes() - startMs;
 
-            recordTraceEvent (method, result);
+            recordTraceEvent (method, *paramsObject, result, elapsedMs);
 
             if (auto* resultObject = result.getDynamicObject())
             {
@@ -1830,20 +1832,118 @@ namespace melatonin
             return false;
         }
 
-        void recordTraceEvent (const juce::String& method, const juce::var& result)
+        void recordTraceEvent (const juce::String& method, juce::DynamicObject& params, const juce::var& result, double elapsedMs)
         {
             if (!traceEnabled || method == "trace_start" || method == "trace_stop")
                 return;
 
             juce::String errorCode;
+            juce::String errorMessage;
 
             if (auto* object = result.getDynamicObject())
+            {
                 errorCode = object->getProperty ("__error").toString();
+                errorMessage = object->getProperty ("message").toString();
+            }
 
             traceEvents.add (object ({ { "timeMs", (double) juce::Time::currentTimeMillis() },
                                        { "method", method },
+                                       { "elapsedMs", elapsedMs },
+                                       { "params", traceParamsSummary (params) },
                                        { "ok", errorCode.isEmpty() },
-                                       { "error", errorCode } }));
+                                       { "error", errorCode },
+                                       { "message", errorMessage },
+                                       { "result", traceResultSummary (result) } }));
+        }
+
+        static juce::var traceParamsSummary (juce::DynamicObject& params)
+        {
+            auto* summary = new juce::DynamicObject();
+
+            for (auto property : { "ref",
+                                   "targetRef",
+                                   "locator",
+                                   "targetLocator",
+                                   "x",
+                                   "y",
+                                   "toX",
+                                   "toY",
+                                   "dx",
+                                   "dy",
+                                   "steps",
+                                   "role",
+                                   "name",
+                                   "text",
+                                   "componentId",
+                                   "componentName",
+                                   "value",
+                                   "checked",
+                                   "key",
+                                   "file",
+                                   "target",
+                                   "format",
+                                   "depth",
+                                   "timeoutMs",
+                                   "force",
+                                   "trial",
+                                   "visible",
+                                   "exact",
+                                   "stateHash" })
+            {
+                auto value = params.getProperty (property);
+
+                if (!value.isVoid())
+                    summary->setProperty (property, traceValueSummary (value));
+            }
+
+            return juce::var (summary);
+        }
+
+        static juce::var traceValueSummary (const juce::var& value)
+        {
+            if (value.isString())
+            {
+                auto text = value.toString();
+                return text.length() > 512 ? text.substring (0, 512) + "..." : text;
+            }
+
+            return value;
+        }
+
+        static juce::var traceResultSummary (const juce::var& result)
+        {
+            auto* resultObject = result.getDynamicObject();
+
+            if (resultObject == nullptr)
+                return {};
+
+            if (resultObject->getProperty ("__error").isString())
+                return object ({ { "error", resultObject->getProperty ("__error") },
+                                 { "message", resultObject->getProperty ("message") } });
+
+            auto* summary = new juce::DynamicObject();
+
+            for (auto property : { "stateHash",
+                                   "generation",
+                                   "count",
+                                   "ref",
+                                   "text",
+                                   "value",
+                                   "file",
+                                   "trace",
+                                   "events",
+                                   "mimeType" })
+            {
+                auto value = resultObject->getProperty (property);
+
+                if (!value.isVoid())
+                    summary->setProperty (property, traceValueSummary (value));
+            }
+
+            if (auto actionability = resultObject->getProperty ("actionability"); actionability.isObject())
+                summary->setProperty ("actionability", actionability);
+
+            return juce::var (summary);
         }
 
         static juce::String asObjectProperty (const juce::var& value, const juce::Identifier& property)

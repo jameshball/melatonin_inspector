@@ -310,11 +310,40 @@ namespace
             auto traceFile = screenshotDirectory.getChildFile ("melatonin-automation-trace.json");
             runCli ({ "-s", sessionName, "trace-start", "--file", traceFile.getFullPathName() });
             runCli ({ "-s", sessionName, "snapshot", "--format", "json", "--depth", "4" });
+            auto tracedFailure = runCliExpectFailure ({ "-s", sessionName, "click", "--component-id", "trace.missing", "--timeout-ms", "50" });
+            require (tracedFailure.contains ("Timed out") || tracedFailure.contains ("Locator did not match"),
+                     "expected traced missing locator click to fail\n" + tracedFailure);
             auto traceStop = juce::JSON::parse (runCli ({ "-s", sessionName, "trace-stop" }));
-            require ((int) asObject (traceStop, "trace-stop").getProperty ("events") >= 1, "trace-stop did not record events");
+            require ((int) asObject (traceStop, "trace-stop").getProperty ("events") >= 2, "trace-stop did not record events");
             auto traceJson = juce::JSON::parse (traceFile.loadFileAsString());
             auto traceEvents = asObject (traceJson, "trace file").getProperty ("events");
             require (traceEvents.isArray() && !traceEvents.getArray()->isEmpty(), "trace file did not contain events");
+            bool foundFailedTraceEvent = false;
+            bool foundStructuredTraceEvent = false;
+
+            for (const auto& traceEvent : *traceEvents.getArray())
+            {
+                auto& eventObject = asObject (traceEvent, "trace event");
+                auto params = eventObject.getProperty ("params");
+                auto result = eventObject.getProperty ("result");
+                auto* resultObject = result.getDynamicObject();
+
+                if (resultObject != nullptr && resultObject->getProperty ("text").isString())
+                    require (resultObject->getProperty ("text").toString().length() <= 515,
+                             "trace result text summary should be capped");
+
+                foundStructuredTraceEvent = foundStructuredTraceEvent
+                                            || ((double) eventObject.getProperty ("elapsedMs") >= 0.0
+                                                && params.isObject()
+                                                && result.isObject());
+                foundFailedTraceEvent = foundFailedTraceEvent
+                                        || (!(bool) eventObject.getProperty ("ok")
+                                            && eventObject.getProperty ("error").toString().isNotEmpty()
+                                            && eventObject.getProperty ("message").toString().isNotEmpty());
+            }
+
+            require (foundStructuredTraceEvent, "trace file did not include structured params/result/timing fields");
+            require (foundFailedTraceEvent, "trace file did not include the expected failed action event");
 
             auto snapshotAgain = readSnapshot();
             auto& snapshotObject = asObject (snapshot, "snapshot");

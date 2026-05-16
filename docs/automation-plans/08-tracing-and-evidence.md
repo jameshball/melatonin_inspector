@@ -52,6 +52,17 @@ Stop returns:
 }
 ```
 
+Current increment:
+
+- Keep the existing `trace_start`/`trace_stop` protocol shape.
+- Expand each trace event from method/ok/error into a structured action record:
+  method, elapsed milliseconds, redacted params, result summary, and error
+  message.
+- Explicitly test a failed action while tracing so failures are recorded before
+  the endpoint returns an error.
+- Defer full before/after screenshot and snapshot bundles to the next trace
+  increment, because those require isolated non-mutating snapshot generation.
+
 ## CLI Changes
 
 Add:
