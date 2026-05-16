@@ -330,11 +330,11 @@ melatonin-ui -s MyPlugin set-bounds m1-12 --x 20 --y 40 --w 200 --h 48
 
 Refs are scoped to the latest snapshot generation, so take a fresh snapshot before issuing actions and use the refs from that snapshot.
 
-There is also a dependency-free MCP adapter at `tools/melatonin_mcp.js`. Configure an MCP client to launch it with Node, then use the `juce_snapshot`, `juce_screenshot`, `juce_click`, `juce_type`, and related tools against the same running automation session.
+There is also an npm-free MCP adapter at `tools/melatonin_mcp.js`. Configure an MCP client to launch it with Node, then use the `juce_snapshot`, `juce_screenshot`, `juce_click`, `juce_type`, and related tools against the same running automation session.
 
 ### Automation end-to-end test
 
-The repo includes `tests/automation_fixture.cpp`, a small JUCE app with top-level tabs, nested tabs, a `TextEditor`, buttons, a slider, a draggable component, and mutation targets. It is intended to prove that the automation endpoint can navigate between pages, click by ref and coordinates, type and press keys in text controls, drag sliders and components, mutate bounds/properties, capture screenshots, and serve the same app through both the CLI and MCP adapter.
+The repo includes `tests/automation_fixture.cpp`, a small JUCE app with top-level tabs, nested tabs, a `TextEditor`, buttons, a slider, a draggable component, and mutation targets. When built with automation enabled, it runs a C++ self-test that proves the automation endpoint can navigate between pages, click by ref and coordinates, type and press keys in text controls, drag sliders and components, mutate bounds/properties, capture screenshots, and serve the same app through the CLI.
 
 Build and run it with automation enabled:
 
@@ -344,10 +344,11 @@ cmake -S . -B /tmp/melatonin-inspector-fixture \
   -DMELATONIN_INSPECTOR_ENABLE_AUTOMATION=ON \
   -DMELATONIN_INSPECTOR_BUILD_CLI=ON
 cmake --build /tmp/melatonin-inspector-fixture --parallel 4
-MELATONIN_AUTOMATION_BUILD_DIR=/tmp/melatonin-inspector-fixture node tests/automation_e2e.js
+MELATONIN_AUTOMATION_BUILD_DIR=/tmp/melatonin-inspector-fixture \
+  /tmp/melatonin-inspector-fixture/automation_fixture_artefacts/automation_fixture
 ```
 
-On macOS the script expects the app at `/tmp/melatonin-inspector-fixture/automation_fixture_artefacts/automation_fixture.app/Contents/MacOS/automation_fixture` and the CLI at `/tmp/melatonin-inspector-fixture/melatonin-ui_artefacts/melatonin-ui`. You can override those with `MELATONIN_AUTOMATION_APP` and `MELATONIN_UI`.
+On macOS, run `/tmp/melatonin-inspector-fixture/automation_fixture_artefacts/automation_fixture.app/Contents/MacOS/automation_fixture` instead. The self-test expects the CLI at `/tmp/melatonin-inspector-fixture/melatonin-ui_artefacts/melatonin-ui`; you can override that with `MELATONIN_UI`.
 
 ## FAQ
 

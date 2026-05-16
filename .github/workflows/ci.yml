@@ -116,7 +116,7 @@ jobs:
         if: ${{ matrix.automation_e2e == true && runner.os == 'Linux' }}
         env:
           MELATONIN_AUTOMATION_BUILD_DIR: ${{ github.workspace }}/Builds
-        run: xvfb-run -a node tests/automation_e2e.js
+        run: xvfb-run -a Builds/automation_fixture_artefacts/automation_fixture
 
       - name: Run
         if: ${{ matrix.os == 'macos-latest' }}

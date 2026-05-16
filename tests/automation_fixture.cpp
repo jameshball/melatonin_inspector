@@ -1,7 +1,473 @@
 #include <melatonin_inspector/melatonin_inspector.h>
 
+#if MELATONIN_INSPECTOR_ENABLE_AUTOMATION
+    #include <iostream>
+    #include <stdexcept>
+#endif
+
 namespace
 {
+#if MELATONIN_INSPECTOR_ENABLE_AUTOMATION
+    constexpr auto sessionName = "automation_fixture";
+
+    void require (bool condition, const juce::String& message)
+    {
+        if (!condition)
+            throw std::runtime_error (message.toStdString());
+    }
+
+    juce::File tempDirectory()
+    {
+        const auto temp = juce::SystemStats::getEnvironmentVariable (
+        #if JUCE_WINDOWS
+            "TEMP",
+        #else
+            "TMPDIR",
+        #endif
+            {});
+
+        return temp.isNotEmpty() ? juce::File (temp) : juce::File ("/tmp");
+    }
+
+    juce::File sessionsDirectory()
+    {
+        return tempDirectory().getChildFile ("melatonin_inspector").getChildFile ("sessions");
+    }
+
+    void cleanupSessionFiles()
+    {
+        auto directory = sessionsDirectory();
+
+        if (!directory.isDirectory())
+            return;
+
+        for (const auto& entry : juce::RangedDirectoryIterator (directory, false, "*.json", juce::File::findFiles))
+        {
+            auto file = entry.getFile();
+            auto parsed = juce::JSON::parse (file.loadFileAsString());
+
+            if (auto* object = parsed.getDynamicObject())
+                if (object->getProperty ("session").toString() == sessionName)
+                    file.deleteFile();
+        }
+    }
+
+    juce::File inferBuildDirectory()
+    {
+        const auto overridePath = juce::SystemStats::getEnvironmentVariable ("MELATONIN_AUTOMATION_BUILD_DIR", {});
+
+        if (overridePath.isNotEmpty())
+            return juce::File (overridePath);
+
+        auto executable = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
+
+    #if JUCE_MAC
+        return executable.getParentDirectory()
+                         .getParentDirectory()
+                         .getParentDirectory()
+                         .getParentDirectory()
+                         .getParentDirectory();
+    #elif JUCE_WINDOWS
+        return executable.getParentDirectory().getParentDirectory().getParentDirectory();
+    #else
+        return executable.getParentDirectory().getParentDirectory();
+    #endif
+    }
+
+    juce::File findMelatoninUi()
+    {
+        const auto overridePath = juce::SystemStats::getEnvironmentVariable ("MELATONIN_UI", {});
+
+        if (overridePath.isNotEmpty())
+            return juce::File (overridePath);
+
+        auto artefacts = inferBuildDirectory().getChildFile ("melatonin-ui_artefacts");
+
+    #if JUCE_WINDOWS
+        const auto executableName = "melatonin-ui.exe";
+
+        for (auto configuration : { "Debug", "Release", "RelWithDebInfo", "MinSizeRel" })
+        {
+            auto candidate = artefacts.getChildFile (configuration).getChildFile (executableName);
+
+            if (candidate.existsAsFile())
+                return candidate;
+        }
+
+        return artefacts.getChildFile (executableName);
+    #else
+        return artefacts.getChildFile ("melatonin-ui");
+    #endif
+    }
+
+    juce::StringArray makeArgs (std::initializer_list<juce::String> values)
+    {
+        juce::StringArray result;
+
+        for (const auto& value : values)
+            result.add (value);
+
+        return result;
+    }
+
+    juce::DynamicObject& asObject (const juce::var& value, const juce::String& context)
+    {
+        auto* object = value.getDynamicObject();
+        require (object != nullptr, context + " is not a JSON object");
+        return *object;
+    }
+
+    juce::var findNode (const juce::var& node, const std::function<bool (juce::DynamicObject&)>& predicate)
+    {
+        auto* object = node.getDynamicObject();
+
+        if (object == nullptr)
+            return {};
+
+        if (predicate (*object))
+            return node;
+
+        auto children = object->getProperty ("children");
+
+        if (children.isArray())
+            for (const auto& child : *children.getArray())
+                if (auto found = findNode (child, predicate); !found.isVoid())
+                    return found;
+
+        return {};
+    }
+
+    juce::var findByComponentName (const juce::var& snapshot, const juce::String& componentName)
+    {
+        auto tree = asObject (snapshot, "snapshot").getProperty ("tree");
+        return findNode (tree, [&componentName] (juce::DynamicObject& node) {
+            return node.getProperty ("componentName").toString() == componentName;
+        });
+    }
+
+    juce::String refByComponentName (const juce::var& snapshot, const juce::String& componentName)
+    {
+        auto node = findByComponentName (snapshot, componentName);
+        require (!node.isVoid(), "Could not find componentName " + componentName);
+        return asObject (node, componentName).getProperty ("ref").toString();
+    }
+
+    juce::Rectangle<int> boundsOf (const juce::var& node)
+    {
+        auto bounds = asObject (node, "node").getProperty ("bounds");
+        auto& boundsObject = asObject (bounds, "bounds");
+
+        return { (int) boundsObject.getProperty ("x"),
+                 (int) boundsObject.getProperty ("y"),
+                 (int) boundsObject.getProperty ("w"),
+                 (int) boundsObject.getProperty ("h") };
+    }
+
+    double valueOf (const juce::var& node)
+    {
+        return asObject (node, "node").getProperty ("value").toString().getDoubleValue();
+    }
+
+    void assertStatus (const juce::var& snapshot, const juce::String& expected)
+    {
+        auto status = findByComponentName (snapshot, "fixture.status");
+        require (!status.isVoid(), "snapshot is missing fixture.status");
+
+        auto& object = asObject (status, "fixture.status");
+        auto actual = object.getProperty ("name").toString()
+                      + "\n" + object.getProperty ("title").toString()
+                      + "\n" + object.getProperty ("value").toString();
+
+        require (actual.contains (expected), "expected status \"" + expected + "\", got \"" + actual + "\"");
+    }
+
+    int readBigEndianInt (const juce::MemoryBlock& bytes, size_t offset)
+    {
+        auto* data = static_cast<const unsigned char*> (bytes.getData());
+        return ((int) data[offset] << 24) | ((int) data[offset + 1] << 16) | ((int) data[offset + 2] << 8) | (int) data[offset + 3];
+    }
+
+    juce::MemoryBlock loadPng (const juce::File& file, const juce::String& label)
+    {
+        juce::MemoryBlock bytes;
+        require (file.loadFileAsData (bytes), label + " could not be read: " + file.getFullPathName());
+
+        static constexpr unsigned char pngSignature[] { 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a };
+        require (bytes.getSize() > 1000, label + " is unexpectedly small: " + juce::String ((int) bytes.getSize()) + " bytes");
+        require (bytes.getSize() >= sizeof (pngSignature), label + " is not a PNG: " + file.getFullPathName());
+
+        auto* data = static_cast<const unsigned char*> (bytes.getData());
+
+        for (size_t i = 0; i < sizeof (pngSignature); ++i)
+            require (data[i] == pngSignature[i], label + " is not a PNG: " + file.getFullPathName());
+
+        return bytes;
+    }
+
+    void assertPng (const juce::File& file, const juce::String& label)
+    {
+        loadPng (file, label);
+    }
+
+    void assertPngSize (const juce::File& file, int width, int height, const juce::String& label)
+    {
+        auto bytes = loadPng (file, label);
+        auto actualWidth = readBigEndianInt (bytes, 16);
+        auto actualHeight = readBigEndianInt (bytes, 20);
+
+        require (actualWidth == width && actualHeight == height,
+                 label + " expected " + juce::String (width) + "x" + juce::String (height)
+                     + ", got " + juce::String (actualWidth) + "x" + juce::String (actualHeight));
+    }
+
+    class AutomationFixtureSelfTest : public juce::Thread
+    {
+    public:
+        explicit AutomationFixtureSelfTest (std::function<void (int)> onCompleteCallback)
+            : juce::Thread ("Automation Fixture Self Test"),
+              onComplete (std::move (onCompleteCallback)),
+              cliPath (findMelatoninUi())
+        {
+        }
+
+        ~AutomationFixtureSelfTest() override
+        {
+            signalThreadShouldExit();
+            stopThread (2000);
+        }
+
+        void run() override
+        {
+            try
+            {
+                runChecks();
+                std::cout << "ok - CLI automation e2e passed\n";
+                std::cout << "root screenshot: " << rootScreenshot.getFullPathName() << "\n";
+                finish (0);
+            }
+            catch (const std::exception& e)
+            {
+                std::cerr << "automation_fixture self-test failed: " << e.what() << "\n";
+                finish (1);
+            }
+        }
+
+    private:
+        std::function<void (int)> onComplete;
+        juce::File cliPath;
+        juce::File screenshotDirectory = juce::SystemStats::getEnvironmentVariable ("MELATONIN_SCREENSHOT_DIR", {}).isNotEmpty()
+                                             ? juce::File (juce::SystemStats::getEnvironmentVariable ("MELATONIN_SCREENSHOT_DIR", {}))
+                                             : tempDirectory();
+        juce::File rootScreenshot;
+
+        void finish (int returnCode)
+        {
+            auto callback = onComplete;
+            juce::MessageManager::callAsync ([callback, returnCode] {
+                if (callback)
+                    callback (returnCode);
+            });
+        }
+
+        void runChecks()
+        {
+            require (cliPath.existsAsFile(), "Missing melatonin-ui CLI: " + cliPath.getFullPathName());
+            waitForSession();
+
+            auto listOutput = runCli ({ "list" });
+            require (listOutput.contains (juce::String (sessionName) + " "), "CLI list did not show the automation_fixture process");
+
+            auto snapshot = readSnapshot();
+            require (!findByComponentName (snapshot, "fixture.tabs").isVoid(), "snapshot is missing top-level tabs");
+            require (!findByComponentName (snapshot, "controls.slider").isVoid(), "snapshot is missing the controls slider");
+
+            rootScreenshot = screenshotDirectory.getChildFile ("melatonin-automation-e2e-root.png");
+            runCli ({ "-s", sessionName, "screenshot", "--target", "root", "--file", rootScreenshot.getFullPathName() });
+            assertPng (rootScreenshot, "root screenshot");
+
+            auto buttonScreenshot = screenshotDirectory.getChildFile ("melatonin-automation-e2e-button.png");
+            auto editorButton = findByComponentName (snapshot, "nav.editor");
+            auto editorButtonBounds = boundsOf (editorButton);
+            runCli ({ "-s", sessionName, "screenshot", "--ref", asObject (editorButton, "nav.editor").getProperty ("ref").toString(), "--file", buttonScreenshot.getFullPathName() });
+            assertPng (buttonScreenshot, "button screenshot");
+            assertPngSize (buttonScreenshot, editorButtonBounds.getWidth(), editorButtonBounds.getHeight(), "button screenshot");
+
+            clickXYAtNode (findByComponentName (snapshot, "controls.power"));
+            snapshot = readSnapshot();
+            require ((bool) asObject (findByComponentName (snapshot, "controls.power"), "controls.power").getProperty ("toggleState"),
+                     "click-xy did not toggle the power button");
+            assertStatus (snapshot, "Status: Power On");
+
+            auto sliderBefore = valueOf (findByComponentName (snapshot, "controls.slider"));
+            dragRef (refByComponentName (snapshot, "controls.slider"), 90, 0);
+            snapshot = readSnapshot();
+            auto sliderAfter = valueOf (findByComponentName (snapshot, "controls.slider"));
+            require (sliderAfter > sliderBefore,
+                     "slider drag did not increase value: " + juce::String (sliderBefore) + " -> " + juce::String (sliderAfter));
+            assertStatus (snapshot, "Status: Slider");
+
+            clickRef (refByComponentName (snapshot, "nav.editor"));
+            snapshot = readSnapshot();
+            assertStatus (snapshot, "Status: Editor");
+            require (!findByComponentName (snapshot, "editor.text").isVoid(), "editor page did not expose its text editor");
+
+            auto editorRef = refByComponentName (snapshot, "editor.text");
+            typeRef (editorRef, "hello from automation");
+            snapshot = readSnapshot();
+            pressRef (refByComponentName (snapshot, "editor.text"), "!");
+            snapshot = readSnapshot();
+            clickRef (refByComponentName (snapshot, "editor.apply"));
+            snapshot = readSnapshot();
+            assertStatus (snapshot, "Status: Applied hello from automation!");
+
+            pressRef (refByComponentName (snapshot, "editor.text"), "backspace");
+            snapshot = readSnapshot();
+            clickRef (refByComponentName (snapshot, "editor.apply"));
+            snapshot = readSnapshot();
+            assertStatus (snapshot, "Status: Applied hello from automation");
+
+            clickRef (refByComponentName (snapshot, "nav.advanced"));
+            snapshot = readSnapshot();
+            assertStatus (snapshot, "Status: Advanced");
+            require (!findByComponentName (snapshot, "advanced.tabs").isVoid(), "advanced page did not expose nested tabs");
+
+            clickRef (refByComponentName (snapshot, "advanced.goActions"));
+            snapshot = readSnapshot();
+            assertStatus (snapshot, "Status: Nested Actions");
+            require (!findByComponentName (snapshot, "advanced.reset").isVoid(), "nested Actions tab did not expose Reset All");
+            require (!findByComponentName (snapshot, "advanced.dragBox").isVoid(), "nested Actions tab did not expose Drag Box");
+
+            auto dragBoxBefore = findByComponentName (snapshot, "advanced.dragBox");
+            auto dragBoxBeforeBounds = boundsOf (dragBoxBefore);
+            dragRef (asObject (dragBoxBefore, "advanced.dragBox").getProperty ("ref").toString(), 40, 15);
+            snapshot = readSnapshot();
+            auto dragBoxAfterBounds = boundsOf (findByComponentName (snapshot, "advanced.dragBox"));
+            require (dragBoxAfterBounds.getX() == dragBoxBeforeBounds.getX() + 40, "drag did not move Drag Box on the x axis");
+            require (dragBoxAfterBounds.getY() == dragBoxBeforeBounds.getY() + 15, "drag did not move Drag Box on the y axis");
+            assertStatus (snapshot, "Status: DragBox");
+
+            auto resetRef = refByComponentName (snapshot, "advanced.reset");
+            runCli ({ "-s", sessionName, "set-bounds", resetRef, "--x", "20", "--y", "24", "--w", "180", "--h", "34" });
+            snapshot = readSnapshot();
+            auto resetAfterBounds = findByComponentName (snapshot, "advanced.reset");
+            auto resetBounds = boundsOf (resetAfterBounds);
+            require (resetBounds.getWidth() == 180 && resetBounds.getHeight() == 34, "set-bounds did not update Reset All dimensions");
+
+            runCli ({ "-s", sessionName, "set-property", asObject (resetAfterBounds, "advanced.reset").getProperty ("ref").toString(), "alpha", "0.9" });
+            snapshot = readSnapshot();
+            clickRef (refByComponentName (snapshot, "advanced.reset"));
+            snapshot = readSnapshot();
+            assertStatus (snapshot, "Status: Reset");
+        }
+
+        juce::String runCli (std::initializer_list<juce::String> args)
+        {
+            return runCli (makeArgs (args));
+        }
+
+        juce::String runCli (juce::StringArray args)
+        {
+            juce::StringArray command;
+            command.add (cliPath.getFullPathName());
+            command.addArray (args);
+
+            juce::ChildProcess process;
+            require (process.start (command, juce::ChildProcess::wantStdOut | juce::ChildProcess::wantStdErr),
+                     "Could not start " + command.joinIntoString (" "));
+
+            juce::String output;
+            auto deadline = juce::Time::currentTimeMillis() + 10000;
+            char buffer[4096] {};
+
+            while (process.isRunning())
+            {
+                if (auto bytesRead = process.readProcessOutput (buffer, (int) sizeof (buffer)); bytesRead > 0)
+                    output << juce::String::fromUTF8 (buffer, bytesRead);
+
+                if (juce::Time::currentTimeMillis() > deadline || threadShouldExit())
+                {
+                    process.kill();
+                    throw std::runtime_error (("Timed out running " + command.joinIntoString (" ") + "\n" + output).toStdString());
+                }
+
+                juce::Thread::sleep (10);
+            }
+
+            for (;;)
+            {
+                auto bytesRead = process.readProcessOutput (buffer, (int) sizeof (buffer));
+
+                if (bytesRead <= 0)
+                    break;
+
+                output << juce::String::fromUTF8 (buffer, bytesRead);
+            }
+
+            require (process.getExitCode() == 0,
+                     "melatonin-ui " + args.joinIntoString (" ") + " failed with exit code " + juce::String ((int) process.getExitCode()) + "\n" + output);
+
+            return output;
+        }
+
+        juce::var readSnapshot()
+        {
+            auto parsed = juce::JSON::parse (runCli ({ "-s", sessionName, "snapshot", "--format", "json", "--depth", "12" }));
+            asObject (parsed, "snapshot");
+            return parsed;
+        }
+
+        void waitForSession()
+        {
+            auto deadline = juce::Time::currentTimeMillis() + 15000;
+
+            while (juce::Time::currentTimeMillis() < deadline && !threadShouldExit())
+            {
+                auto listOutput = runCli ({ "list" });
+
+                if (listOutput.contains (juce::String (sessionName) + " "))
+                    return;
+
+                juce::Thread::sleep (250);
+            }
+
+            throw std::runtime_error ("Timed out waiting for automation_fixture to advertise an automation session");
+        }
+
+        void clickRef (const juce::String& ref)
+        {
+            runCli ({ "-s", sessionName, "click", ref });
+        }
+
+        void clickXYAtNode (const juce::var& node)
+        {
+            require (!node.isVoid(), "click-xy target node is missing");
+            auto bounds = boundsOf (node);
+            runCli ({ "-s",
+                      sessionName,
+                      "click-xy",
+                      juce::String (bounds.getCentreX()),
+                      juce::String (bounds.getCentreY()) });
+        }
+
+        void typeRef (const juce::String& ref, const juce::String& text)
+        {
+            runCli ({ "-s", sessionName, "type", ref, text });
+        }
+
+        void pressRef (const juce::String& ref, const juce::String& key)
+        {
+            runCli ({ "-s", sessionName, "press", key, "--ref", ref });
+        }
+
+        void dragRef (const juce::String& ref, int dx, int dy)
+        {
+            runCli ({ "-s", sessionName, "drag", ref, "--dx", juce::String (dx), "--dy", juce::String (dy) });
+        }
+
+        JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AutomationFixtureSelfTest)
+    };
+#endif
+
     class CallbackTabbedComponent : public juce::TabbedComponent
     {
     public:
@@ -300,22 +766,37 @@ class AutomationFixtureApp : public juce::JUCEApplication
 public:
     void initialise (const juce::String&) override
     {
+#if MELATONIN_INSPECTOR_ENABLE_AUTOMATION
+        cleanupSessionFiles();
+#endif
+
         mainWindow = std::make_unique<MainWindow> (getApplicationName());
         inspector = std::make_unique<melatonin::Inspector> (mainWindow->content);
 
 #if MELATONIN_INSPECTOR_ENABLE_AUTOMATION
         melatonin::AutomationOptions options;
-        options.sessionName = "automation_fixture";
+        options.sessionName = sessionName;
         inspector->enableAutomation (options);
 #endif
 
         inspector->setVisible (true);
         juce::Process::makeForegroundProcess();
         mainWindow->toFront (true);
+
+#if MELATONIN_INSPECTOR_ENABLE_AUTOMATION
+        selfTest = std::make_unique<AutomationFixtureSelfTest> ([this] (int returnCode) {
+            setApplicationReturnValue (returnCode);
+            quit();
+        });
+        selfTest->startThread();
+#endif
     }
 
     void shutdown() override
     {
+#if MELATONIN_INSPECTOR_ENABLE_AUTOMATION
+        selfTest = nullptr;
+#endif
         inspector = nullptr;
         mainWindow = nullptr;
     }
@@ -352,6 +833,9 @@ public:
 private:
     std::unique_ptr<MainWindow> mainWindow;
     std::unique_ptr<melatonin::Inspector> inspector;
+#if MELATONIN_INSPECTOR_ENABLE_AUTOMATION
+    std::unique_ptr<AutomationFixtureSelfTest> selfTest;
+#endif
 };
 
 START_JUCE_APPLICATION (AutomationFixtureApp)
