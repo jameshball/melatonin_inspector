@@ -123,8 +123,11 @@ namespace melatonin
         juce::StreamingSocket* activeClient = nullptr;
         int boundPort = -1;
         juce::File advertisementFile;
+        juce::File traceFile;
+        juce::Array<juce::var> traceEvents;
         juce::Array<ComponentRef> refs;
         int generation = 0;
+        bool traceEnabled = false;
         static constexpr int protocolVersion = 1;
 
         void run() override
@@ -218,6 +221,8 @@ namespace melatonin
                 paramsObject = &emptyParams;
 
             auto result = dispatchRequest (method, *paramsObject);
+
+            recordTraceEvent (method, result);
 
             if (auto* resultObject = result.getDynamicObject())
             {
@@ -424,6 +429,12 @@ namespace melatonin
             if (method == "windows")
                 return windows();
 
+            if (method == "trace_start")
+                return traceStart (params);
+
+            if (method == "trace_stop")
+                return traceStop();
+
             if (method == "screenshot")
                 return screenshot (params);
 
@@ -496,7 +507,7 @@ namespace melatonin
                                                      { "semanticControls", true },
                                                      { "richInput", true },
                                                      { "screenshots", true },
-                                                     { "tracing", false },
+                                                     { "tracing", true },
                                                      { "windows", true } }) },
                              { "security", object ({ { "allowInput", options.allowInput },
                                                      { "allowMutation", options.allowMutation },
@@ -518,6 +529,42 @@ namespace melatonin
             }
 
             return object ({ { "windows", result } });
+        }
+
+        juce::var traceStart (juce::DynamicObject& params)
+        {
+            auto requestedFile = getString (params, "file", {});
+
+            if (requestedFile.isEmpty())
+                requestedFile = "melatonin-automation-trace.json";
+
+            auto fileOrError = writableArtifactFile (requestedFile);
+
+            if (isError (fileOrError))
+                return fileOrError;
+
+            traceFile = juce::File (fileOrError.toString());
+            traceEvents.clear();
+            traceEnabled = true;
+
+            return object ({ { "trace", traceFile.getFullPathName() } });
+        }
+
+        juce::var traceStop()
+        {
+            traceEnabled = false;
+
+            if (traceFile.getFullPathName().isEmpty())
+                return error ("trace_not_started", "Trace has not been started.");
+
+            auto payload = object ({ { "events", traceEvents } });
+            traceFile.getParentDirectory().createDirectory();
+
+            if (!traceFile.replaceWithText (juce::JSON::toString (payload, true)))
+                return error ("trace_write_failed", "Could not write trace file: " + traceFile.getFullPathName());
+
+            return object ({ { "trace", traceFile.getFullPathName() },
+                             { "events", traceEvents.size() } });
         }
 
         juce::var snapshot (juce::DynamicObject& params)
@@ -1477,6 +1524,22 @@ namespace melatonin
                 return object->getProperty ("__error").isString();
 
             return false;
+        }
+
+        void recordTraceEvent (const juce::String& method, const juce::var& result)
+        {
+            if (!traceEnabled || method == "trace_start" || method == "trace_stop")
+                return;
+
+            juce::String errorCode;
+
+            if (auto* object = result.getDynamicObject())
+                errorCode = object->getProperty ("__error").toString();
+
+            traceEvents.add (object ({ { "timeMs", (double) juce::Time::currentTimeMillis() },
+                                       { "method", method },
+                                       { "ok", errorCode.isEmpty() },
+                                       { "error", errorCode } }));
         }
 
         static juce::String asObjectProperty (const juce::var& value, const juce::Identifier& property)

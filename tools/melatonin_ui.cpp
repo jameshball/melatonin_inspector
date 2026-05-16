@@ -366,6 +366,12 @@ namespace
             tool ("juce_windows",
                   "List automation-owned JUCE windows for a session.",
                   toolSchema ({ { "session", stringSchema() } })),
+            tool ("juce_trace_start",
+                  "Start recording automation trace events.",
+                  toolSchema ({ { "session", stringSchema() }, { "file", stringSchema() } })),
+            tool ("juce_trace_stop",
+                  "Stop recording automation trace events and write the trace artifact.",
+                  toolSchema ({ { "session", stringSchema() } })),
             tool ("juce_capabilities",
                   "Return protocol, feature, and security capabilities for a running automation session.",
                   toolSchema ({ { "session", stringSchema() } })),
@@ -494,6 +500,8 @@ namespace
         if (name == "juce_wait_for_value") return "wait_for_value";
         if (name == "juce_wait_for_snapshot_change") return "wait_for_snapshot_change";
         if (name == "juce_windows") return "windows";
+        if (name == "juce_trace_start") return "trace_start";
+        if (name == "juce_trace_stop") return "trace_stop";
 
         return {};
     }
@@ -702,6 +710,8 @@ namespace
             << "  melatonin-ui mcp\n"
             << "  melatonin-ui -s <session> capabilities\n"
             << "  melatonin-ui -s <session> windows\n"
+            << "  melatonin-ui -s <session> trace-start --file trace.json\n"
+            << "  melatonin-ui -s <session> trace-stop\n"
             << "  melatonin-ui -s <session> locator [--role role] [--name text] [--text text] [--format json]\n"
             << "  melatonin-ui -s <session> snapshot [--format text|json] [--depth n]\n"
             << "  melatonin-ui -s <session> screenshot [--target root|--ref m1-1] --file /tmp/root.png\n"
@@ -820,6 +830,18 @@ int main (int argc, char* argv[])
         if (command == "windows")
         {
             printResult (request (*sessionObject, "windows", emptyObject()), true);
+            return 0;
+        }
+
+        if (command == "trace-start")
+        {
+            printResult (request (*sessionObject, "trace_start", object ({ { "file", optionValue (args, "--file") } })), true);
+            return 0;
+        }
+
+        if (command == "trace-stop")
+        {
+            printResult (request (*sessionObject, "trace_stop", emptyObject()), true);
             return 0;
         }
 

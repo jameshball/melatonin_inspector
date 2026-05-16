@@ -307,6 +307,15 @@ namespace
             require (asObject (windowsArray.getArray()->getReference (0), "root window").getProperty ("id").toString() == "root",
                      "root window id should be root");
 
+            auto traceFile = screenshotDirectory.getChildFile ("melatonin-automation-trace.json");
+            runCli ({ "-s", sessionName, "trace-start", "--file", traceFile.getFullPathName() });
+            runCli ({ "-s", sessionName, "snapshot", "--format", "json", "--depth", "4" });
+            auto traceStop = juce::JSON::parse (runCli ({ "-s", sessionName, "trace-stop" }));
+            require ((int) asObject (traceStop, "trace-stop").getProperty ("events") >= 1, "trace-stop did not record events");
+            auto traceJson = juce::JSON::parse (traceFile.loadFileAsString());
+            auto traceEvents = asObject (traceJson, "trace file").getProperty ("events");
+            require (traceEvents.isArray() && !traceEvents.getArray()->isEmpty(), "trace file did not contain events");
+
             auto snapshotAgain = readSnapshot();
             auto& snapshotObject = asObject (snapshot, "snapshot");
             auto& snapshotAgainObject = asObject (snapshotAgain, "snapshotAgain");
