@@ -330,6 +330,23 @@ melatonin-ui -s MyPlugin set-bounds m12 --x 20 --y 40 --w 200 --h 48
 
 There is also a dependency-free MCP adapter at `tools/melatonin_mcp.js`. Configure an MCP client to launch it with Node, then use the `juce_snapshot`, `juce_screenshot`, `juce_click`, `juce_type`, and related tools against the same running automation session.
 
+### Automation end-to-end test
+
+The repo includes `tests/automation_fixture.cpp`, a small JUCE app with top-level tabs, nested tabs, a `TextEditor`, buttons, a slider, and mutation targets. It is intended to prove that the automation endpoint can navigate between pages, type into controls, mutate bounds/properties, capture screenshots, and serve the same app through both the CLI and MCP adapter.
+
+Build and run it with automation enabled:
+
+```sh
+cmake -S . -B /tmp/melatonin-inspector-fixture \
+  -DTARGET_NAME=automation_fixture \
+  -DMELATONIN_INSPECTOR_ENABLE_AUTOMATION=ON \
+  -DMELATONIN_INSPECTOR_BUILD_CLI=ON
+cmake --build /tmp/melatonin-inspector-fixture --parallel 4
+MELATONIN_AUTOMATION_BUILD_DIR=/tmp/melatonin-inspector-fixture node tests/automation_e2e.js
+```
+
+On macOS the script expects the app at `/tmp/melatonin-inspector-fixture/automation_fixture_artefacts/automation_fixture.app/Contents/MacOS/automation_fixture` and the CLI at `/tmp/melatonin-inspector-fixture/melatonin-ui_artefacts/melatonin-ui`. You can override those with `MELATONIN_AUTOMATION_APP` and `MELATONIN_UI`.
+
 ## FAQ
 
 ### Can I use this in a GUI app/standalone?

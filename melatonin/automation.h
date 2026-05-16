@@ -326,8 +326,7 @@ namespace melatonin
             if (target == nullptr)
                 return error ("stale_ref", "Run snapshot again.");
 
-            auto bounds = getRootBounds (*target);
-            synthesizeClickAt (bounds.getCentre());
+            activateComponent (*target);
             return snapshotAfterAction();
         }
 
@@ -336,7 +335,16 @@ namespace melatonin
             if (!options.allowInput)
                 return error ("input_disabled", "Automation input is disabled for this session.");
 
-            synthesizeClickAt ({ getInt (params, "x", 0), getInt (params, "y", 0) });
+            const auto rootPoint = juce::Point<int> { getInt (params, "x", 0), getInt (params, "y", 0) };
+
+            if (root != nullptr)
+            {
+                if (auto* target = findComponentAt (*root, rootPoint))
+                    activateComponent (*target);
+                else
+                    synthesizeClickAt (rootPoint);
+            }
+
             return snapshotAfterAction();
         }
 
@@ -504,6 +512,37 @@ namespace melatonin
             return root != nullptr ? root->getPeer() : nullptr;
         }
 
+        void activateComponent (juce::Component& target)
+        {
+            if (auto* button = dynamic_cast<juce::Button*> (&target))
+            {
+                button->triggerClick();
+                return;
+            }
+
+            auto bounds = getRootBounds (target);
+            synthesizeClickAt (bounds.getCentre());
+        }
+
+        juce::Component* findComponentAt (juce::Component& component, juce::Point<int> localPoint) const
+        {
+            for (int i = component.getNumChildComponents(); --i >= 0;)
+            {
+                auto* child = component.getChildComponent (i);
+
+                if (child == nullptr || !child->isVisible() || isInspectorInternalComponent (*child))
+                    continue;
+
+                if (!child->getBounds().contains (localPoint))
+                    continue;
+
+                if (auto* found = findComponentAt (*child, child->getLocalPoint (&component, localPoint)))
+                    return found;
+            }
+
+            return component.getLocalBounds().contains (localPoint) ? &component : nullptr;
+        }
+
         void synthesizeClickAt (juce::Point<int> rootPoint)
         {
             if (root == nullptr)
@@ -541,6 +580,7 @@ namespace melatonin
 
             node->setProperty ("ref", ref);
             node->setProperty ("name", componentString (&component));
+            node->setProperty ("componentName", component.getName());
             node->setProperty ("class", type (component));
             node->setProperty ("enabled", component.isEnabled());
             node->setProperty ("visible", component.isVisible());
