@@ -387,6 +387,8 @@ namespace melatonin
                    || method == "type"
                    || method == "fill"
                    || method == "press"
+                   || method == "key_down"
+                   || method == "key_up"
                    || method == "check"
                    || method == "uncheck"
                    || method == "set_value"
@@ -480,6 +482,12 @@ namespace melatonin
 
             if (method == "press")
                 return pressKey (params);
+
+            if (method == "key_down")
+                return keyDown (params);
+
+            if (method == "key_up")
+                return keyUp (params);
 
             if (method == "check")
                 return check (params, true);
@@ -1159,7 +1167,7 @@ namespace melatonin
             if (!options.allowInput)
                 return error ("input_disabled", "Automation input is disabled for this session.");
 
-            auto key = getString (params, "key", {});
+            auto key = parseKey (getString (params, "key", {}));
             juce::Component* target = nullptr;
 
             if (hasTargetSelector (params))
@@ -1183,18 +1191,63 @@ namespace melatonin
                 target->grabKeyboardFocus();
             }
 
-            const auto keyCode = keyCodeForName (key);
-            const auto textCharacter = key.length() == 1 ? key[0] : juce::juce_wchar();
-
-            if (auto* editor = dynamic_cast<juce::TextEditor*> (target))
-            {
-                editor->keyPressed (juce::KeyPress (keyCode, juce::ModifierKeys(), textCharacter));
+            if (target != nullptr && target->keyPressed (key.keyPress))
                 return snapshotAfterAction();
+
+            if (auto* peer = getRootPeer())
+                peer->handleKeyPress (key.keyPress);
+
+            return snapshotAfterAction();
+        }
+
+        juce::var keyDown (juce::DynamicObject& params)
+        {
+            return keyUpOrDown (params, true);
+        }
+
+        juce::var keyUp (juce::DynamicObject& params)
+        {
+            return keyUpOrDown (params, false);
+        }
+
+        juce::var keyUpOrDown (juce::DynamicObject& params, bool isDown)
+        {
+            if (!options.allowInput)
+                return error ("input_disabled", "Automation input is disabled for this session.");
+
+            auto key = parseKey (getString (params, "key", {}));
+            juce::Component* target = nullptr;
+
+            if (hasTargetSelector (params))
+            {
+                auto resolution = resolveTarget (params, true, true);
+
+                if (!resolution.error.isVoid())
+                    return resolution.error;
+
+                target = resolution.component;
+            }
+
+            if (target != nullptr)
+            {
+                if (auto validationError = validateInputTarget (*target, params); !validationError.isVoid())
+                    return validationError;
+
+                if (isTrial (params))
+                    return actionabilityResult (*target);
+
+                target->grabKeyboardFocus();
+
+                if (isDown && target->keyPressed (key.keyPress))
+                    return snapshotAfterAction();
             }
 
             if (auto* peer = getRootPeer())
             {
-                peer->handleKeyPress (keyCode, textCharacter);
+                peer->handleKeyUpOrDown (isDown);
+
+                if (isDown)
+                    peer->handleKeyPress (key.keyPress);
             }
 
             return snapshotAfterAction();
@@ -2133,6 +2186,40 @@ namespace melatonin
             }
 
             return "unknown";
+        }
+
+        struct ParsedKey
+        {
+            juce::KeyPress keyPress;
+        };
+
+        static ParsedKey parseKey (const juce::String& key)
+        {
+            juce::StringArray tokens;
+            tokens.addTokens (key, "+", {});
+            tokens.trim();
+            tokens.removeEmptyStrings();
+
+            juce::ModifierKeys modifiers;
+            auto keyName = tokens.isEmpty() ? key : tokens[tokens.size() - 1];
+
+            for (int i = 0; i < tokens.size() - 1; ++i)
+            {
+                auto modifier = tokens[i].trim().toLowerCase();
+
+                if (modifier == "shift")
+                    modifiers = modifiers.withFlags (juce::ModifierKeys::shiftModifier);
+                else if (modifier == "control" || modifier == "ctrl")
+                    modifiers = modifiers.withFlags (juce::ModifierKeys::ctrlModifier);
+                else if (modifier == "alt" || modifier == "option")
+                    modifiers = modifiers.withFlags (juce::ModifierKeys::altModifier);
+                else if (modifier == "meta" || modifier == "cmd" || modifier == "command")
+                    modifiers = modifiers.withFlags (juce::ModifierKeys::commandModifier);
+            }
+
+            const auto keyCode = keyCodeForName (keyName);
+            const auto textCharacter = keyName.length() == 1 ? keyName[0] : juce::juce_wchar();
+            return { juce::KeyPress (keyCode, modifiers, textCharacter) };
         }
 
         static int keyCodeForName (juce::String key)

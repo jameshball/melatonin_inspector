@@ -533,6 +533,16 @@ namespace
             snapshot = readSnapshot();
             assertStatus (snapshot, "Status: RightClick");
 
+            runCli ({ "-s", sessionName, "press", "Control+K", "--component-id", "advanced.inputProbe" });
+            snapshot = readSnapshot();
+            assertStatus (snapshot, "Status: Key Ctrl+K");
+
+            runCli ({ "-s", sessionName, "key-down", "Shift+X", "--component-id", "advanced.inputProbe" });
+            snapshot = readSnapshot();
+            assertStatus (snapshot, "Status: Key Shift+X");
+            runCli ({ "-s", sessionName, "key-up", "Shift+X", "--component-id", "advanced.inputProbe" });
+            snapshot = readSnapshot();
+
             auto resetRef = refByComponentName (snapshot, "advanced.reset");
             runCli ({ "-s", sessionName, "set-bounds", resetRef, "--x", "20", "--y", "24", "--w", "180", "--h", "34" });
             snapshot = readSnapshot();
@@ -698,6 +708,8 @@ namespace
             bool foundWaitForTextTool = false;
             bool foundDoubleClickTool = false;
             bool foundRightClickTool = false;
+            bool foundKeyDownTool = false;
+            bool foundKeyUpTool = false;
 
             for (const auto& toolInfo : *tools.getArray())
             {
@@ -715,6 +727,12 @@ namespace
 
                 if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_right_click")
                     foundRightClickTool = true;
+
+                if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_key_down")
+                    foundKeyDownTool = true;
+
+                if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_key_up")
+                    foundKeyUpTool = true;
             }
 
             require (foundSnapshotTool, "MCP tools/list did not expose juce_snapshot");
@@ -722,6 +740,8 @@ namespace
             require (foundWaitForTextTool, "MCP tools/list did not expose juce_wait_for_text");
             require (foundDoubleClickTool, "MCP tools/list did not expose juce_dblclick");
             require (foundRightClickTool, "MCP tools/list did not expose juce_right_click");
+            require (foundKeyDownTool, "MCP tools/list did not expose juce_key_down");
+            require (foundKeyUpTool, "MCP tools/list did not expose juce_key_up");
 
             auto capabilitiesCallResult = assertMcpResult (parseMcpLine (lines, 2), 3);
             auto& capabilitiesCall = asObject (capabilitiesCallResult, "MCP capabilities result");
@@ -958,6 +978,7 @@ namespace
         {
             setName ("advanced.inputProbe");
             setComponentID ("advanced.inputProbe");
+            setWantsKeyboardFocus (true);
         }
 
         void paint (juce::Graphics& g) override
@@ -979,8 +1000,44 @@ namespace
                 onDoubleClick();
         }
 
+        bool keyPressed (const juce::KeyPress& key) override
+        {
+            if (onKeyPressed)
+                onKeyPressed (describeKey (key));
+
+            return true;
+        }
+
         std::function<void()> onDoubleClick;
         std::function<void()> onRightClick;
+        std::function<void (const juce::String&)> onKeyPressed;
+
+    private:
+        static juce::String describeKey (const juce::KeyPress& key)
+        {
+            juce::String result;
+
+            if (key.getModifiers().isCtrlDown())
+                result << "Ctrl+";
+
+            if (key.getModifiers().isCommandDown() && !key.getModifiers().isCtrlDown())
+                result << "Meta+";
+
+            if (key.getModifiers().isAltDown())
+                result << "Alt+";
+
+            if (key.getModifiers().isShiftDown())
+                result << "Shift+";
+
+            auto code = key.getKeyCode();
+
+            if (code > 0 && code < 128)
+                result << juce::String::charToString ((juce::juce_wchar) juce::CharacterFunctions::toUpperCase ((juce::juce_wchar) code));
+            else
+                result << juce::String (code);
+
+            return result;
+        }
     };
 
     class EditorPage : public juce::Component
@@ -1162,6 +1219,10 @@ namespace
 
             advanced.inputProbe.onRightClick = [this] {
                 setStatus ("Status: RightClick");
+            };
+
+            advanced.inputProbe.onKeyPressed = [this] (const juce::String& key) {
+                setStatus ("Status: Key " + key);
             };
 
             tabs.onCurrentTabChanged = [this] (int index, const juce::String& name) {

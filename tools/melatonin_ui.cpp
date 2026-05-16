@@ -437,6 +437,12 @@ namespace
             tool ("juce_press",
                   "Press a key and return a fresh snapshot.",
                   toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "key", stringSchema() } }, { "key" })),
+            tool ("juce_key_down",
+                  "Send a key-down event, supporting chords such as Control+K.",
+                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "key", stringSchema() } }, { "key" })),
+            tool ("juce_key_up",
+                  "Send a key-up event, supporting chords such as Control+K.",
+                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "key", stringSchema() } }, { "key" })),
             tool ("juce_check",
                   "Set a toggleable button checked.",
                   toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() } })),
@@ -508,6 +514,8 @@ namespace
         if (name == "juce_type") return "type";
         if (name == "juce_fill") return "fill";
         if (name == "juce_press") return "press";
+        if (name == "juce_key_down") return "key_down";
+        if (name == "juce_key_up") return "key_up";
         if (name == "juce_check") return "check";
         if (name == "juce_uncheck") return "uncheck";
         if (name == "juce_set_value") return "set_value";
@@ -755,6 +763,8 @@ namespace
             << "  melatonin-ui -s <session> select-option <ref> --text name|--index n|--id n\n"
             << "  melatonin-ui -s <session> select-tab <ref> --name tab|--index n\n"
             << "  melatonin-ui -s <session> press <key> [--ref m1]\n"
+            << "  melatonin-ui -s <session> key-down <key> [--ref m1]\n"
+            << "  melatonin-ui -s <session> key-up <key> [--ref m1]\n"
             << "  melatonin-ui -s <session> drag <ref> --dx n --dy n\n"
             << "  melatonin-ui -s <session> set-bounds <ref> --x n --y n --w n --h n\n"
             << "  melatonin-ui -s <session> set-property <ref> <name> <value>\n"
@@ -1058,7 +1068,7 @@ int main (int argc, char* argv[])
             return 0;
         }
 
-        if (command == "press" && args.size() >= 1)
+        if ((command == "press" || command == "key-down" || command == "key-up") && args.size() >= 1)
         {
             auto ref = optionValue (args, "--ref");
             juce::DynamicObject tempParams;
@@ -1069,7 +1079,9 @@ int main (int argc, char* argv[])
             params.getDynamicObject()->setProperty ("force", tempParams.getProperty ("force"));
             params.getDynamicObject()->setProperty ("trial", tempParams.getProperty ("trial"));
             addLocatorIfPresent (*params.getDynamicObject(), locator);
-            printResult (request (*sessionObject, "press", params));
+            printResult (request (*sessionObject,
+                                  command == "press" ? "press" : (command == "key-down" ? "key_down" : "key_up"),
+                                  params));
             return 0;
         }
 
