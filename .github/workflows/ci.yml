@@ -30,7 +30,7 @@ jobs:
   BuildAndTest:
     name: ${{ matrix.os }} ${{ matrix.app }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: 20
 
     strategy:
       fail-fast: false
@@ -45,6 +45,7 @@ jobs:
           - { app: unique_ptr_disabled, os: ubuntu-latest, juce: JUCE8 }
           - { app: member_enabled,      os: ubuntu-latest, juce: JUCE8 }
           - { app: automation_fixture,  os: ubuntu-latest, juce: JUCE8, automation_e2e: true }
+          - { app: unique_ptr_disabled, os: ubuntu-latest, juce: JUCE8, demorunner_e2e: true }
 
     steps:
       - name: Checkout
@@ -88,6 +89,9 @@ jobs:
           if [ "${{ matrix.automation_e2e }}" == "true" ]; then
             automation_flags="-DMELATONIN_INSPECTOR_ENABLE_AUTOMATION=ON -DMELATONIN_INSPECTOR_BUILD_CLI=ON"
           fi
+          if [ "${{ matrix.demorunner_e2e }}" == "true" ]; then
+            automation_flags="-DMELATONIN_INSPECTOR_ENABLE_AUTOMATION=ON -DMELATONIN_INSPECTOR_BUILD_CLI=ON -DMELATONIN_INSPECTOR_BUILD_DEMORUNNER_AUTOMATION=ON"
+          fi
 
           if [ "${{ matrix.juce }}" == "JUCE7" ]; then
             cmake -B Builds -DTARGET_NAME:STRING=${{ matrix.app }} -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache $automation_flags . -DJUCE7=ON
@@ -101,6 +105,9 @@ jobs:
             automation_flags=""
             if [ "${{ matrix.automation_e2e }}" == "true" ]; then
               automation_flags="-DMELATONIN_INSPECTOR_ENABLE_AUTOMATION=ON -DMELATONIN_INSPECTOR_BUILD_CLI=ON"
+            fi
+            if [ "${{ matrix.demorunner_e2e }}" == "true" ]; then
+              automation_flags="-DMELATONIN_INSPECTOR_ENABLE_AUTOMATION=ON -DMELATONIN_INSPECTOR_BUILD_CLI=ON -DMELATONIN_INSPECTOR_BUILD_DEMORUNNER_AUTOMATION=ON"
             fi
 
             if [ "${{ matrix.juce }}" == "JUCE7" ]; then
@@ -116,7 +123,34 @@ jobs:
         if: ${{ matrix.automation_e2e == true && runner.os == 'Linux' }}
         env:
           MELATONIN_AUTOMATION_BUILD_DIR: ${{ github.workspace }}/Builds
-        run: xvfb-run -a Builds/automation_fixture_artefacts/automation_fixture
+          MELATONIN_SCREENSHOT_DIR: ${{ github.workspace }}/Builds/automation-evidence
+        run: |
+          mkdir -p "$MELATONIN_SCREENSHOT_DIR"
+          xvfb-run -a Builds/automation_fixture_artefacts/automation_fixture
+
+      - name: Run DemoRunner automation smoke
+        if: ${{ matrix.demorunner_e2e == true && runner.os == 'Linux' }}
+        env:
+          MELATONIN_DEMORUNNER_ARTIFACT_DIR: ${{ github.workspace }}/Builds/demorunner-evidence
+        run: |
+          mkdir -p "$MELATONIN_DEMORUNNER_ARTIFACT_DIR"
+          xvfb-run -a Builds/melatonin-demorunner-smoke_artefacts/melatonin-demorunner-smoke
+
+      - name: Upload automation evidence
+        if: ${{ always() && matrix.automation_e2e == true && runner.os == 'Linux' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: automation-evidence-${{ matrix.os }}-${{ matrix.app }}
+          path: Builds/automation-evidence
+          if-no-files-found: ignore
+
+      - name: Upload DemoRunner evidence
+        if: ${{ always() && matrix.demorunner_e2e == true && runner.os == 'Linux' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: demorunner-evidence-${{ matrix.os }}
+          path: Builds/demorunner-evidence
+          if-no-files-found: ignore
 
       - name: Run
         if: ${{ matrix.os == 'macos-latest' }}

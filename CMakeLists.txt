@@ -100,7 +100,7 @@ if (MelatoninInspector_IS_TOP_LEVEL)
             "${MELATONIN_DEMORUNNER_MAIN}")
         string(REPLACE
             "setContentOwned (new MainComponent(), false);"
-            "auto* mainComponent = new MainComponent();\n            setContentOwned (mainComponent, false);\n\n           #if MELATONIN_INSPECTOR_ENABLE_AUTOMATION\n            melatonin::AutomationOptions automationOptions;\n            automationOptions.sessionName = \"juce_demorunner\";\n            automationOptions.allowFileWrite = true;\n            automationOptions.artifactRoot = File::getSpecialLocation (File::tempDirectory);\n            automationInspector = std::make_unique<melatonin::Inspector> (*mainComponent);\n            automationInspector->enableAutomation (automationOptions);\n           #endif"
+            "auto* mainComponent = new MainComponent();\n            setContentOwned (mainComponent, false);\n\n           #if MELATONIN_INSPECTOR_ENABLE_AUTOMATION\n            melatonin::AutomationOptions automationOptions;\n            automationOptions.sessionName = \"juce_demorunner\";\n            automationOptions.allowFileWrite = true;\n            automationOptions.artifactRoot = File::getSpecialLocation (File::tempDirectory);\n            automationInspector = std::make_unique<melatonin::Inspector> (*mainComponent, false);\n            automationInspector->enableAutomation (automationOptions);\n           #endif"
             MELATONIN_DEMORUNNER_MAIN
             "${MELATONIN_DEMORUNNER_MAIN}")
         string(REPLACE
@@ -181,6 +181,24 @@ if (MelatoninInspector_IS_TOP_LEVEL)
         foreach(folder IN ITEMS ../Assets ../Audio ../DSP ../GUI ../Utilities)
             juce_add_bundle_resources_directory(melatonin-demorunner "${MELATONIN_DEMORUNNER_SOURCE_DIR}/${folder}")
         endforeach()
+
+        if (NOT TARGET melatonin-ui)
+            message(FATAL_ERROR "MELATONIN_INSPECTOR_BUILD_DEMORUNNER_AUTOMATION requires MELATONIN_INSPECTOR_BUILD_CLI=ON")
+        endif ()
+
+        juce_add_console_app(melatonin-demorunner-smoke VERSION 1.0.0)
+        juce_generate_juce_header(melatonin-demorunner-smoke)
+        target_sources(melatonin-demorunner-smoke PRIVATE tests/demorunner_smoke.cpp)
+        target_compile_definitions(melatonin-demorunner-smoke PRIVATE
+            JUCE_USE_CURL=0
+            MELATONIN_DEMORUNNER_EXECUTABLE="$<TARGET_FILE:melatonin-demorunner>"
+            MELATONIN_UI_EXECUTABLE="$<TARGET_FILE:melatonin-ui>")
+        target_link_libraries(melatonin-demorunner-smoke PRIVATE
+            juce::juce_core
+            juce::juce_recommended_config_flags
+            juce::juce_recommended_lto_flags
+            juce::juce_recommended_warning_flags)
+        add_dependencies(melatonin-demorunner-smoke melatonin-demorunner melatonin-ui)
     endif ()
 endif ()
 
