@@ -330,6 +330,31 @@ namespace
             require (!findByComponentName (snapshot, "fixture.tabs").isVoid(), "snapshot is missing top-level tabs");
             require (!findByComponentName (snapshot, "controls.slider").isVoid(), "snapshot is missing the controls slider");
 
+            auto& topTabs = asObject (findByComponentName (snapshot, "fixture.tabs"), "fixture.tabs");
+            auto topTabNames = topTabs.getProperty ("tabNames");
+            require (topTabNames.isArray() && topTabNames.getArray()->size() == 3, "snapshot did not expose fixture tab names");
+            require (topTabs.getProperty ("currentTab").toString() == "Controls", "snapshot did not expose current fixture tab");
+
+            auto& sliderMetadata = asObject (findByComponentName (snapshot, "controls.slider"), "controls.slider");
+            require ((double) sliderMetadata.getProperty ("minimum") == 0.0, "slider metadata did not expose minimum");
+            require ((double) sliderMetadata.getProperty ("maximum") == 100.0, "slider metadata did not expose maximum");
+            require ((double) sliderMetadata.getProperty ("interval") == 1.0, "slider metadata did not expose interval");
+
+            auto& comboMetadata = asObject (findByComponentName (snapshot, "controls.combo"), "controls.combo");
+            auto comboOptions = comboMetadata.getProperty ("options");
+            require (comboOptions.isArray() && comboOptions.getArray()->size() == 3, "combo metadata did not expose all options");
+            require (comboMetadata.getProperty ("selectedId").toString() == "1", "combo metadata did not expose selected id");
+            require (comboMetadata.getProperty ("selectedText").toString() == "Alpha", "combo metadata did not expose selected text");
+
+            auto& listMetadata = asObject (findByComponentName (snapshot, "controls.optionList"), "controls.optionList");
+            auto listOptions = listMetadata.getProperty ("options");
+            require ((int) listMetadata.getProperty ("rowCount") == 3, "ListBox metadata did not expose row count");
+            require (listOptions.isArray() && listOptions.getArray()->size() == 3, "ListBox metadata did not expose row options");
+
+            auto& editorMetadata = asObject (findByComponentName (snapshot, "editor.text"), "editor.text");
+            require ((bool) editorMetadata.getProperty ("editable"), "TextEditor metadata did not expose editable=true");
+            require (! (bool) editorMetadata.getProperty ("readOnly"), "TextEditor metadata did not expose readOnly=false");
+
             auto buttonLocator = readLocator ({ "--role", "button", "--name", "Go Editor" });
             require ((int) asObject (buttonLocator, "button locator").getProperty ("count") == 1,
                      "role/name locator did not find Go Editor");
@@ -454,10 +479,16 @@ namespace
 
             runCli ({ "-s", sessionName, "select-option", "--component-id", "controls.optionList", "--text", "Green" });
             snapshot = readSnapshot();
+            require ((int) asObject (findByComponentName (snapshot, "controls.optionList"), "controls.optionList").getProperty ("selectedRow") == 1,
+                     "ListBox metadata did not expose selected Green row");
+            require (asObject (findByComponentName (snapshot, "controls.optionList"), "controls.optionList").getProperty ("selectedText").toString() == "Green",
+                     "ListBox metadata did not expose selected Green text");
             assertStatus (snapshot, "Status: List Green");
 
             runCli ({ "-s", sessionName, "select-option", "--component-id", "controls.optionList", "--index", "2" });
             snapshot = readSnapshot();
+            require ((int) asObject (findByComponentName (snapshot, "controls.optionList"), "controls.optionList").getProperty ("selectedRow") == 2,
+                     "ListBox metadata did not expose selected Blue row");
             assertStatus (snapshot, "Status: List Blue");
 
             auto sliderBefore = valueOf (findByComponentName (snapshot, "controls.slider"));

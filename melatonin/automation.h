@@ -2044,6 +2044,73 @@ namespace melatonin
             {
                 node->setProperty ("toggleable", button->isToggleable());
                 node->setProperty ("toggleState", button->getToggleState());
+                node->setProperty ("checked", button->getToggleState());
+            }
+
+            if (auto* editor = dynamic_cast<juce::TextEditor*> (&component))
+            {
+                node->setProperty ("editable", ! editor->isReadOnly());
+                node->setProperty ("readOnly", editor->isReadOnly());
+                node->setProperty ("value", editor->getText());
+            }
+
+            if (auto* label = dynamic_cast<juce::Label*> (&component))
+            {
+                node->setProperty ("editable", label->isEditable());
+                node->setProperty ("readOnly", ! label->isEditable());
+                node->setProperty ("value", label->getText());
+            }
+
+            if (auto* slider = dynamic_cast<juce::Slider*> (&component))
+            {
+                node->setProperty ("value", slider->getValue());
+                node->setProperty ("minimum", slider->getMinimum());
+                node->setProperty ("maximum", slider->getMaximum());
+                node->setProperty ("interval", slider->getInterval());
+            }
+
+            if (auto* combo = dynamic_cast<juce::ComboBox*> (&component))
+            {
+                node->setProperty ("value", combo->getText());
+                node->setProperty ("selectedIndex", combo->getSelectedItemIndex());
+                node->setProperty ("selectedId", combo->getSelectedId());
+                node->setProperty ("selectedText", combo->getText());
+                node->setProperty ("options", comboOptionsToVar (*combo));
+            }
+
+            if (auto* tabs = dynamic_cast<juce::TabbedComponent*> (&component))
+            {
+                auto tabNames = tabs->getTabNames();
+                const auto currentTabIndex = tabs->getCurrentTabIndex();
+
+                node->setProperty ("tabNames", stringArrayToVar (tabNames));
+                node->setProperty ("currentTabIndex", currentTabIndex);
+
+                if (juce::isPositiveAndBelow (currentTabIndex, tabNames.size()))
+                    node->setProperty ("currentTab", tabNames[currentTabIndex]);
+            }
+
+            if (auto* viewport = dynamic_cast<juce::Viewport*> (&component))
+            {
+                node->setProperty ("scrollX", viewport->getViewPositionX());
+                node->setProperty ("scrollY", viewport->getViewPositionY());
+                node->setProperty ("viewWidth", viewport->getViewWidth());
+                node->setProperty ("viewHeight", viewport->getViewHeight());
+
+                if (auto* viewed = viewport->getViewedComponent())
+                {
+                    node->setProperty ("contentWidth", viewed->getWidth());
+                    node->setProperty ("contentHeight", viewed->getHeight());
+                }
+            }
+
+            if (auto* listBox = dynamic_cast<juce::ListBox*> (&component))
+            {
+                node->setProperty ("rowCount", listBox->getListBoxModel() != nullptr ? listBox->getListBoxModel()->getNumRows() : 0);
+                node->setProperty ("selectedRow", listBox->getSelectedRow());
+                node->setProperty ("selectedRows", selectedRowsToVar (*listBox));
+                node->setProperty ("selectedText", listRowName (*listBox, listBox->getSelectedRow()));
+                node->setProperty ("options", listRowsToVar (*listBox));
             }
 
             juce::Array<juce::var> children;
@@ -2053,6 +2120,65 @@ namespace melatonin
 
             node->setProperty ("children", children);
             return node;
+        }
+
+        static juce::var stringArrayToVar (const juce::StringArray& values)
+        {
+            juce::Array<juce::var> result;
+
+            for (const auto& value : values)
+                result.add (value);
+
+            return result;
+        }
+
+        static juce::var comboOptionsToVar (juce::ComboBox& combo)
+        {
+            juce::Array<juce::var> result;
+
+            for (int i = 0; i < combo.getNumItems(); ++i)
+                result.add (object ({ { "index", i },
+                                      { "id", combo.getItemId (i) },
+                                      { "text", combo.getItemText (i) } }));
+
+            return result;
+        }
+
+        static juce::String listRowName (juce::ListBox& listBox, int row)
+        {
+            auto* model = listBox.getListBoxModel();
+
+            if (model == nullptr || ! juce::isPositiveAndBelow (row, model->getNumRows()))
+                return {};
+
+            return model->getNameForRow (row);
+        }
+
+        static juce::var listRowsToVar (juce::ListBox& listBox)
+        {
+            juce::Array<juce::var> result;
+            auto* model = listBox.getListBoxModel();
+
+            if (model == nullptr)
+                return result;
+
+            const auto rowsToExpose = juce::jmin (model->getNumRows(), 200);
+
+            for (int i = 0; i < rowsToExpose; ++i)
+                result.add (object ({ { "index", i }, { "text", model->getNameForRow (i) } }));
+
+            return result;
+        }
+
+        static juce::var selectedRowsToVar (juce::ListBox& listBox)
+        {
+            juce::Array<juce::var> result;
+            auto selectedRows = listBox.getSelectedRows();
+
+            for (int i = 0; i < selectedRows.size(); ++i)
+                result.add (selectedRows[i]);
+
+            return result;
         }
 
         void addSerializedChildren (juce::Array<juce::var>& children, juce::Component& component, int depth, int maxDepth)
@@ -2163,7 +2289,29 @@ namespace melatonin
                                "title",
                                "value",
                                "toggleable",
-                               "toggleState" })
+                               "toggleState",
+                               "checked",
+                               "editable",
+                               "readOnly",
+                               "selectedIndex",
+                               "selectedId",
+                               "selectedText",
+                               "minimum",
+                               "maximum",
+                               "interval",
+                               "tabNames",
+                               "currentTabIndex",
+                               "currentTab",
+                               "scrollX",
+                               "scrollY",
+                               "viewWidth",
+                               "viewHeight",
+                               "contentWidth",
+                               "contentHeight",
+                               "rowCount",
+                               "selectedRow",
+                               "selectedRows",
+                               "options" })
             {
                 auto property = object->getProperty (name);
 
