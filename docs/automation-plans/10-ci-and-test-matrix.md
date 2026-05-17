@@ -104,7 +104,8 @@ DemoRunner coverage:
 - scrollable settings.
 - real buttons/toggles/sliders/combos/text where deterministic.
 - screenshots.
-- native-source OpenGL screenshot evidence using the heavyweight OpenGLDemo.
+- component-source OpenGL screenshot evidence using OpenGLAppDemo, OpenGLDemo,
+  and OpenGLDemo2D.
 - representative MCP snapshot/screenshot/action.
 
 ## Test Matrix

@@ -22,9 +22,10 @@ Model the surface after:
 - `source=native` uses JUCE's native-window capture where available.
 - Component snapshots can include hidden or offscreen behavior that differs from
   OS-level screenshots. Document this clearly.
-- Native-window screenshots are required for heavyweight content such as
-  OpenGL-backed DemoRunner demos, where component repaint snapshots can miss
-  GPU-rendered pixels.
+- Component screenshots must composite OpenGL-backed components by reading the
+  attached OpenGL framebuffer and drawing JUCE component paint/children over it.
+  Native-window screenshots remain useful as a fallback/diagnostic source, but
+  they are not required for OpenGL visual evidence.
 - File output is useful for CLI and CI, while MCP should return image content.
 
 ## Public Protocol Changes
@@ -66,10 +67,10 @@ Response policy:
 - Endpoint-side file writes require `allowFileWrite=true` and must stay under
   the configured artifact root.
 - `source` accepts `component`, `native`, or `auto`. `component` is deterministic
-  JUCE repaint capture. `native` captures pixels from the native window and
-  crops back to the target, which is the path used for OpenGL visual evidence.
-  `auto` may try native capture for root screenshots and fall back to component
-  snapshots, but the CLI and MCP defaults stay `component`.
+  JUCE repaint capture plus OpenGL framebuffer compositing. `native` captures
+  pixels from the native window and crops back to the target. `auto` may try
+  native capture for root screenshots and fall back to component snapshots, but
+  the CLI and MCP defaults stay `component`.
 
 ## CLI Changes
 
@@ -80,7 +81,7 @@ melatonin-ui -s app screenshot --target root --file /tmp/root.png
 melatonin-ui -s app screenshot --component-name nav.editor --file /tmp/button.png
 melatonin-ui -s app screenshot --role button --name Save --file /tmp/save.png
 melatonin-ui -s app screenshot --target root --clip 0,0,320,200 --file /tmp/clip.png
-melatonin-ui -s app screenshot --target root --source native --file /tmp/opengl.png
+melatonin-ui -s app screenshot --target root --source component --file /tmp/opengl.png
 melatonin-ui -s app screenshot --window 0 --file /tmp/window.png
 ```
 
@@ -105,6 +106,10 @@ Add helpers:
 - validate clip rect.
 - convert root-local clip to component-local clip.
 - crop native-window captures back to the requested root/ref/locator bounds.
+- find OpenGL-backed components in the target hierarchy.
+- read OpenGL framebuffer pixels on the OpenGL render thread.
+- composite those pixels into component screenshots at the component bounds.
+- draw JUCE component paint and child controls over the framebuffer read.
 - encode PNG.
 - write optional file.
 - return image metadata.
@@ -136,8 +141,9 @@ Add components with:
 - Code tab screenshot.
 - Settings viewport screenshot.
 - AccessibilityDemo selected control screenshot.
-- OpenGLDemo native root/clip screenshot that proves GPU-rendered pixels are not
-  blank under the supported CI windowing setup.
+- OpenGLAppDemo/OpenGLDemo/OpenGLDemo2D component-source screenshots that prove
+  GPU-rendered pixels and JUCE overlays/controls are present without native
+  screenshots.
 
 ## Test Matrix
 
@@ -183,7 +189,7 @@ MCP coverage:
 - CLI file output remains simple.
 - Locator screenshots use the same locator strictness as actions.
 - Base64 is opt-in outside MCP to avoid bloated CLI/protocol responses.
-- OpenGL-heavy DemoRunner screenshot evidence uses `source=native` and is
+- OpenGL-heavy DemoRunner screenshot evidence uses `source=component` and is
   checked for pixel variation rather than only PNG validity.
 
 ## Evidence Artifacts

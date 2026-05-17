@@ -33,7 +33,8 @@ isolated components.
 - It includes demos that require hardware, network, web views, cameras, video,
   or heavyweight renderers. Hardware/network/web/video demos should be skipped
   for deterministic PR gating, but OpenGL heavyweight rendering is now a
-  required screenshot probe because it validates native-window capture support.
+  required screenshot probe because it validates component-source framebuffer
+  compositing.
 - Current top-level CMake fetches JUCE `develop`, so patch anchors can move.
   DemoRunner automation must either pin a tested JUCE tag/commit for this target
   or fail with an actionable patch-anchor error.
@@ -145,8 +146,8 @@ Full deterministic allowlist:
   `windows`, capture it with component screenshots, fill its text editor,
   select its combo box, click the primary button, and dismiss the follow-up
   result dialog through window-local coordinate input.
-- Select heavyweight OpenGLDemo and capture both root evidence and a native
-  clipped OpenGL scene screenshot.
+- Select OpenGLAppDemo, OpenGLDemo, and OpenGLDemo2D, then capture component
+  source evidence that includes OpenGL pixels plus JUCE overlays and controls.
 - Switch Demo, Code, and Settings tabs.
 - Scroll Settings viewport.
 - Select a LookAndFeel ComboBox option.
@@ -162,11 +163,11 @@ Skip or quarantine:
 
 OpenGL rule:
 
-- OpenGLDemo is not quarantined.
-- The test must wait for the demo to render, capture `source=native` evidence,
-  and assert the clipped scene has meaningful pixel variation.
-- If native OpenGL capture fails under CI, the screenshot endpoint or CI
-  windowing setup must be fixed rather than silently skipping the demo.
+- OpenGLAppDemo, OpenGLDemo, and OpenGLDemo2D are not quarantined.
+- The test must wait for each demo to render, capture `source=component`
+  evidence, and assert the scene has meaningful pixel variation.
+- If OpenGL component-source capture fails under CI, the screenshot endpoint or
+  CI windowing setup must be fixed rather than silently skipping the demo.
 
 ## Test Matrix
 
@@ -181,7 +182,8 @@ C++ DemoRunner E2E self-test:
 - selects deterministic demos across GUI, Audio, DSP, and Utilities categories.
 - interacts with each selected deterministic demo using real exposed controls,
   pointer input, keyboard input, drag/scroll, or layout resizing as appropriate.
-- selects heavyweight OpenGLDemo and captures native screenshot evidence.
+- selects OpenGLAppDemo/OpenGLDemo/OpenGLDemo2D and captures component-source
+  OpenGL screenshot evidence.
 - performs semantic actions from earlier workstreams.
 - runs representative MCP snapshot and screenshot calls.
 - exits DemoRunner cleanly.
@@ -213,12 +215,12 @@ CI:
 - DemoRunner E2E runs in PR CI.
 - The suite validates navigation across real pages/tabs/panels.
 - The suite does not rely on hardware, network, web, or video demos.
-- The suite does include OpenGLDemo and proves native screenshot capture can see
-  heavyweight rendered pixels.
+- The suite does include OpenGLAppDemo, OpenGLDemo, and OpenGLDemo2D and proves
+  component-source screenshot capture can see heavyweight rendered pixels.
 
 ## Evidence Artifacts
 
 - DemoRunner screenshots for startup, side panel, selected demos, Code tab,
-  Settings tab, OpenGL root, and OpenGL native clipped scene.
+  Settings tab, OpenGL root/component compositing, and OpenGL clipped scenes.
 - DemoRunner trace once tracing exists.
 - CI logs include selected category/demo names.

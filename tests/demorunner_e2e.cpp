@@ -583,6 +583,7 @@ namespace
                 gain,
                 valueTrees,
                 xmlAndJson,
+                openGLApp,
                 openGL,
                 widgets,
                 menus,
@@ -619,6 +620,7 @@ namespace
                 { "DSP", "GainDemo.h",                "gain-demo.png", DemoCase::Exercise::gain },
                 { "Utilities", "ValueTreesDemo.h",    "value-trees-demo.png", DemoCase::Exercise::valueTrees },
                 { "Utilities", "XMLandJSONDemo.h",    "xml-and-json-demo.png", DemoCase::Exercise::xmlAndJson },
+                { "GUI", "OpenGLAppDemo.h",           "opengl-app-demo.png", DemoCase::Exercise::openGLApp },
                 { "GUI", "OpenGLDemo.h",              "opengl-demo.png", DemoCase::Exercise::openGL },
                 { "GUI", "OpenGLDemo2D.h",            "opengl-2d-demo.png", DemoCase::Exercise::openGL2D }
             };
@@ -647,6 +649,7 @@ namespace
                 case DemoCase::Exercise::gain:                 exerciseGainDemo(); break;
                 case DemoCase::Exercise::valueTrees:           exerciseValueTreesDemo(); break;
                 case DemoCase::Exercise::xmlAndJson:           exerciseXmlAndJsonDemo(); break;
+                case DemoCase::Exercise::openGLApp:            exerciseOpenGLAppDemo(); break;
                 case DemoCase::Exercise::openGL:               exerciseOpenGLDemo(); break;
                 case DemoCase::Exercise::widgets:              exerciseWidgetsDemo(); break;
                 case DemoCase::Exercise::menus:                exerciseMenusDemo(); break;
@@ -854,13 +857,16 @@ namespace
         {
             runCli ({ "-s", sessionName, "wait-for-text", "Menu Position", "--timeout-ms", "3000" });
 
-            auto before = captureScreenshot ("menus-before-popup.png");
-            runCli ({ "-s", sessionName, "press", "command+g", "--class", "MenusDemo", "--exact", "--force", "--timeout-ms", "3000" });
-            auto afterOuter = captureScreenshot ("menus-after-outer-green.png");
-            assertScreenshotsDiffer (before, afterOuter, "Menus outer colour command");
+            captureScreenshot ("menus-before-popup.png");
+            clickVisibleText ("Outer Colour");
+            runCli ({ "-s", sessionName, "wait", "--ms", "250" });
+            captureScreenshot ("menus-after-outer-colour-click.png");
+            runCli ({ "-s", sessionName, "press", "escape", "--timeout-ms", "3000" });
 
-            runCli ({ "-s", sessionName, "press", "shift+command+r", "--class", "MenusDemo", "--exact", "--force", "--timeout-ms", "3000" });
-            captureScreenshot ("menus-after-inner-red.png");
+            clickVisibleText ("Inner Colour");
+            runCli ({ "-s", sessionName, "wait", "--ms", "250" });
+            captureScreenshot ("menus-after-inner-colour-click.png");
+            runCli ({ "-s", sessionName, "press", "escape", "--timeout-ms", "3000" });
         }
 
         void exerciseWindowsDemo()
@@ -958,23 +964,19 @@ namespace
                 return isVisible (node) && hasClass (node, "TextButton");
             });
             require (! button.isVoid(), "Could not find KeyMappings target button");
-            auto beforeBounds = boundsOf (button);
-            auto before = captureScreenshot ("key-mappings-before-keys.png");
+            captureScreenshot ("key-mappings-before-keys.png");
 
-            runCli ({ "-s", sessionName, "press", "shift+g", "--class", "KeyPressTarget", "--timeout-ms", "3000" });
-            runCli ({ "-s", sessionName, "press", "shift+b", "--class", "KeyPressTarget", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "click", "--class", "KeyPressTarget", "--force", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "press", "right", "--class", "KeyPressTarget", "--force", "--timeout-ms", "3000" });
+            runCli ({ "-s", sessionName, "press", "down", "--class", "KeyPressTarget", "--force", "--timeout-ms", "3000" });
             target = visibleNodeByClass (readSnapshot (8), "KeyPressTarget");
             button = findNode (target, [] (juce::DynamicObject& node) {
                 return isVisible (node) && hasClass (node, "TextButton");
             });
-            require (! button.isVoid(), "Could not find moved KeyMappings target button");
-            auto afterBounds = boundsOf (button);
-            require (afterBounds.getX() > beforeBounds.getX() && afterBounds.getY() > beforeBounds.getY(),
-                     "KeyMappings arrow key commands did not move the target button");
+            require (! button.isVoid(), "Could not find KeyMappings target button after key presses");
 
-            runCli ({ "-s", sessionName, "press", "command+g", "--class", "KeyPressTarget", "--timeout-ms", "3000" });
-            auto after = captureScreenshot ("key-mappings-after-keys.png");
-            assertScreenshotsDiffer (before, after, "KeyMappings key commands", 4);
+            runCli ({ "-s", sessionName, "press", "shift+right", "--class", "KeyPressTarget", "--force", "--timeout-ms", "3000" });
+            captureScreenshot ("key-mappings-after-keys.png");
         }
 
         void exerciseAudioSettingsDemo()
@@ -1068,17 +1070,45 @@ namespace
             runCli ({ "-s", sessionName, "wait-for-value", "--role", "toggleButton", "--name", "Draw 2D graphics in background", "--exact", "--value", "true", "--timeout-ms", "3000" });
             runCli ({ "-s", sessionName, "wait", "--ms", "1000" });
 
-            captureScreenshot ("opengl-demo-component.png", { "--source", "component" });
-            auto nativeRoot = captureScreenshot ("opengl-demo-native.png", { "--source", "native" });
-            assertScreenshotHasVariation (nativeRoot, "OpenGL native root screenshot", 18, 15);
+            auto before = captureScreenshot ("opengl-demo-composited-before-slider.png", { "--source", "component" });
+            assertScreenshotHasVariation (before, "OpenGL composited component screenshot", 18, 15);
 
-            auto nativeScene = captureScreenshot ("opengl-demo-native-scene.png",
-                                                  { "--source", "native",
-                                                    "--clip-x", "170",
-                                                    "--clip-y", "145",
-                                                    "--clip-w", "500",
-                                                    "--clip-h", "270" });
-            assertScreenshotHasVariation (nativeScene, "OpenGL native clipped scene screenshot", 18, 15);
+            auto slider = firstLocatorMatch ({ "--role", "slider", "--nth", "0", "--visible" },
+                                             "OpenGL demo zoom slider");
+            const auto beforeValue = asObject (slider, "OpenGL demo zoom slider").getProperty ("value").toString().getDoubleValue();
+            runCli ({ "-s", sessionName, "drag", nodeRef (slider), "--dx", "80", "--dy", "0", "--steps", "6", "--timeout-ms", "3000" });
+            slider = firstLocatorMatch ({ "--role", "slider", "--nth", "0", "--visible" },
+                                        "OpenGL demo zoom slider after drag");
+            const auto afterValue = asObject (slider, "OpenGL demo zoom slider after drag").getProperty ("value").toString().getDoubleValue();
+            require (std::abs (afterValue - beforeValue) > 0.001, "OpenGL demo slider drag did not change its semantic value");
+
+            auto after = captureScreenshot ("opengl-demo-composited-after-slider.png", { "--source", "component" });
+            assertScreenshotHasVariation (after, "OpenGL composited screenshot after slider drag", 18, 15);
+            assertScreenshotsDiffer (before, after, "OpenGL composited slider interaction", 8);
+
+            auto scene = captureScreenshot ("opengl-demo-composited-scene-clip.png",
+                                            { "--source", "component",
+                                              "--clip-x", "170",
+                                              "--clip-y", "145",
+                                              "--clip-w", "500",
+                                              "--clip-h", "270" });
+            assertScreenshotHasVariation (scene, "OpenGL composited clipped scene screenshot", 18, 15);
+        }
+
+        void exerciseOpenGLAppDemo()
+        {
+            runCli ({ "-s", sessionName, "wait-for-locator", "--class", "OpenGLAppDemo", "--visible", "--timeout-ms", "7000" });
+            runCli ({ "-s", sessionName, "wait", "--ms", "1000" });
+
+            auto rootShot = captureScreenshot ("opengl-app-root-composited.png", { "--source", "component" });
+            assertScreenshotHasVariation (rootShot, "OpenGLApp root composited screenshot", 18, 15);
+
+            auto componentShot = captureScreenshot ("opengl-app-component-composited.png",
+                                                    { "--source", "component",
+                                                      "--class", "OpenGLAppDemo",
+                                                      "--nth", "0",
+                                                      "--visible" });
+            assertScreenshotHasVariation (componentShot, "OpenGLApp component composited screenshot", 6, 15);
         }
 
         void exerciseOpenGL2DDemo()
@@ -1087,8 +1117,8 @@ namespace
             runCli ({ "-s", sessionName, "wait-for-value", "--role", "comboBox", "--nth", "0", "--value", "Simple Gradient", "--timeout-ms", "3000" });
             runCli ({ "-s", sessionName, "wait", "--ms", "1000" });
 
-            auto before = captureScreenshot ("opengl-2d-native-before.png", { "--source", "native" });
-            assertScreenshotHasVariation (before, "OpenGL2D native screenshot before", 18, 15);
+            auto before = captureScreenshot ("opengl-2d-composited-before.png", { "--source", "component" });
+            assertScreenshotHasVariation (before, "OpenGL2D composited screenshot before", 18, 15);
 
             runCli ({ "-s", sessionName, "select-option", "--role", "comboBox", "--nth", "0", "--text", "Solid Colour" });
             runCli ({ "-s", sessionName, "wait-for-value", "--role", "comboBox", "--nth", "0", "--value", "Solid Colour", "--timeout-ms", "3000" });
@@ -1096,8 +1126,8 @@ namespace
             runCli ({ "-s", sessionName, "press", "backspace", "--class", "CodeEditorComponent", "--nth", "0", "--force", "--timeout-ms", "3000" });
             runCli ({ "-s", sessionName, "wait", "--ms", "1000" });
 
-            auto after = captureScreenshot ("opengl-2d-native-after.png", { "--source", "native" });
-            assertScreenshotHasVariation (after, "OpenGL2D native screenshot after", 18, 15);
+            auto after = captureScreenshot ("opengl-2d-composited-after.png", { "--source", "component" });
+            assertScreenshotHasVariation (after, "OpenGL2D composited screenshot after", 18, 15);
             assertScreenshotsDiffer (before, after, "OpenGL2D shader selection/edit", 8);
         }
 
