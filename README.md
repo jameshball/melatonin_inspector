@@ -301,6 +301,8 @@ See ["Display component performance in real time"](#display-component-performanc
 
 `melatonin_inspector` can expose an opt-in local automation endpoint for Playwright-style agent workflows. This is disabled by default and should only be enabled for trusted local development sessions.
 
+The full current interface is documented in [docs/automation-protocol.md](docs/automation-protocol.md).
+
 Enable the endpoint at compile time:
 
 ```cmake
@@ -337,6 +339,12 @@ melatonin-ui -s MyPlugin click m1-4
 melatonin-ui -s MyPlugin click --component-name nav.editor
 melatonin-ui -s MyPlugin type m1-8 "hello"
 melatonin-ui -s MyPlugin set-bounds m1-12 --x 20 --y 40 --w 200 --h 48
+```
+
+If multiple copies of the same app are running, use the PID shown by `melatonin-ui list`:
+
+```sh
+melatonin-ui -s 12345 snapshot
 ```
 
 Refs are scoped to the latest snapshot generation, so take a fresh snapshot before issuing actions and use the refs from that snapshot.

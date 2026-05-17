@@ -365,6 +365,13 @@ namespace
 
             auto listOutput = runCli ({ "list" });
             require (listOutput.contains (juce::String (sessionName) + " "), "CLI list did not show the automation_fixture process");
+            auto listedPid = listOutput.fromFirstOccurrenceOf ("pid=", false, false)
+                                       .upToFirstOccurrenceOf (" ", false, false)
+                                       .trim();
+            require (listedPid.isNotEmpty() && listedPid.containsOnly ("0123456789"), "CLI list did not expose a targetable pid\n" + listOutput);
+            auto pidCapabilities = parseJsonOutput (runCli ({ "-s", listedPid, "capabilities" }), "pid capabilities");
+            require (asObject (pidCapabilities, "pid capabilities").getProperty ("session").toString() == sessionName,
+                     "CLI -s <pid> did not select the automation_fixture session");
 
             runMcpSmokeCheck();
 

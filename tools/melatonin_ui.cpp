@@ -71,6 +71,7 @@ namespace
                 continue;
 
             if (object->getProperty ("session").toString() == requestedName
+                || object->getProperty ("pid").toString() == requestedName
                 || object->getProperty ("file").toString().contains (requestedName))
             {
                 const auto modifiedAt = (double) object->getProperty ("modifiedAtMs");
