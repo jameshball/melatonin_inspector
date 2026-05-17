@@ -69,6 +69,85 @@ namespace
         return *object;
     }
 
+    juce::var parseJsonOutput (const juce::String& output, const juce::String& context)
+    {
+        auto parsed = juce::JSON::parse (output.trim());
+
+        if (parsed.isObject() || parsed.isArray())
+            return parsed;
+
+        auto objectStart = output.indexOfChar ('{');
+        auto arrayStart = output.indexOfChar ('[');
+        auto start = objectStart < 0 ? arrayStart : (arrayStart < 0 ? objectStart : juce::jmin (objectStart, arrayStart));
+
+        if (start >= 0)
+        {
+            auto depth = 0;
+            auto inString = false;
+            auto escaped = false;
+
+            for (int i = start; i < output.length(); ++i)
+            {
+                const auto c = output[i];
+
+                if (inString)
+                {
+                    if (escaped)
+                    {
+                        escaped = false;
+                    }
+                    else if (c == '\\')
+                    {
+                        escaped = true;
+                    }
+                    else if (c == '"')
+                    {
+                        inString = false;
+                    }
+
+                    continue;
+                }
+
+                if (c == '"')
+                {
+                    inString = true;
+                    continue;
+                }
+
+                if (c == '{' || c == '[')
+                    ++depth;
+                else if (c == '}' || c == ']')
+                    --depth;
+
+                if (depth == 0)
+                {
+                    parsed = juce::JSON::parse (output.substring (start, i + 1));
+
+                    if (parsed.isObject() || parsed.isArray())
+                        return parsed;
+
+                    break;
+                }
+            }
+        }
+
+        for (auto line : juce::StringArray::fromLines (output))
+        {
+            auto trimmed = line.trim();
+
+            if (trimmed.startsWithChar ('{') || trimmed.startsWithChar ('['))
+            {
+                parsed = juce::JSON::parse (trimmed);
+
+                if (parsed.isObject() || parsed.isArray())
+                    return parsed;
+            }
+        }
+
+        require (false, context + " did not contain JSON\n" + output);
+        return {};
+    }
+
     class DemoRunnerE2E
     {
     public:
@@ -111,6 +190,21 @@ namespace
             runCli ({ "-s", sessionName, "wait-for-locator", "--role", "listItem", "--name", "AccessibilityDemo.h", "--exact", "--timeout-ms", "3000" });
             captureScreenshot ("gui-category.png");
 
+            auto compactGuiSnapshot = runCli ({ "-s", sessionName, "snapshot", "--json", "--depth", "8" });
+            auto fullGuiSnapshot = runCli ({ "-s", sessionName, "snapshot", "--full", "--json", "--depth", "8" });
+            require (compactGuiSnapshot.length() < fullGuiSnapshot.length(),
+                     "DemoRunner interesting snapshot should be smaller than the full snapshot");
+            require (compactGuiSnapshot.contains ("AccessibilityDemo.h"),
+                     "DemoRunner interesting snapshot should retain actionable list items");
+
+            auto guiCount = parseJsonOutput (runCli ({ "-s", sessionName, "count", "--role", "listItem", "--name", "AccessibilityDemo.h", "--exact" }), "DemoRunner count");
+            require ((int) asObject (guiCount, "DemoRunner count").getProperty ("count") == 1,
+                     "DemoRunner count did not find AccessibilityDemo.h");
+
+            auto guiDescribe = parseJsonOutput (runCli ({ "-s", sessionName, "describe", "--role", "listItem", "--name", "AccessibilityDemo.h", "--exact" }), "DemoRunner describe");
+            require (asObject (guiDescribe, "DemoRunner describe").getProperty ("text").toString().contains ("click"),
+                     "DemoRunner describe did not expose list item action hints");
+
             clickVisibleListItem ("AccessibilityDemo.h");
             runCli ({ "-s", sessionName, "wait-for-text", "Accessibility Demo", "--timeout-ms", "3000" });
             captureScreenshot ("accessibility-demo.png");
@@ -141,7 +235,7 @@ namespace
             runCli ({ "-s", sessionName, "wait-for-text", "JUCE Logo", "--timeout-ms", "3000" });
             captureScreenshot ("home.png");
 
-            auto traceStop = juce::JSON::parse (runCli ({ "-s", sessionName, "trace-stop" }));
+            auto traceStop = parseJsonOutput (runCli ({ "-s", sessionName, "trace-stop" }), "trace-stop");
             auto& traceStopObject = asObject (traceStop, "trace-stop");
             require ((int) traceStopObject.getProperty ("events") >= 100, "DemoRunner trace did not record enough events");
             copyEvidenceFile (traceStopObject.getProperty ("trace").toString(), "demorunner-trace.json");
@@ -296,14 +390,14 @@ namespace
 
         juce::var readSnapshot (int depth = 4)
         {
-            auto parsed = juce::JSON::parse (runCli ({ "-s", sessionName, "snapshot", "--format", "json", "--depth", juce::String (depth) }));
+            auto parsed = parseJsonOutput (runCli ({ "-s", sessionName, "snapshot", "--full", "--format", "json", "--depth", juce::String (depth) }), "snapshot");
             asObject (parsed, "snapshot");
             return parsed;
         }
 
         juce::var readWindows()
         {
-            auto parsed = juce::JSON::parse (runCli ({ "-s", sessionName, "windows" }));
+            auto parsed = parseJsonOutput (runCli ({ "-s", sessionName, "windows" }), "windows");
             asObject (parsed, "windows");
             return parsed;
         }
@@ -342,7 +436,7 @@ namespace
             auto args = makeArgs ({ "-s", sessionName, "locator", "--format", "json" });
             args.addArray (makeArgs (locatorArgs));
 
-            auto parsed = juce::JSON::parse (runCli (args));
+            auto parsed = parseJsonOutput (runCli (args), "locator");
             asObject (parsed, "locator");
             return parsed;
         }
@@ -1188,7 +1282,20 @@ namespace
             auto args = makeArgs ({ "-s", sessionName, "screenshot", "--file", name, "--no-base64" });
             args.addArray (makeArgs (screenshotArgs));
 
-            auto outputPath = runCli (args);
+            auto output = runCli (args);
+            juce::String outputPath;
+
+            for (auto line : juce::StringArray::fromLines (output))
+            {
+                auto trimmed = line.trim();
+
+                if (trimmed.isNotEmpty())
+                {
+                    outputPath = trimmed;
+                    break;
+                }
+            }
+
             auto screenshot = juce::File (outputPath);
             require (screenshot.existsAsFile() && screenshot.getSize() > 1000,
                      "Screenshot was not written or is too small: " + outputPath);
@@ -1333,11 +1440,17 @@ namespace
             auto output = runMcpBatch ({
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}})",
                 R"({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})",
-                R"({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"juce_snapshot","arguments":{"session":"juce_demorunner","format":"text","depth":5}}})",
+                R"({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"juce_snapshot","arguments":{"session":"juce_demorunner","depth":5}}})",
                 R"({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"juce_screenshot","arguments":{"session":"juce_demorunner","target":"root","includeBase64":true}}})"
             });
 
-            auto lines = juce::StringArray::fromLines (output);
+            auto rawLines = juce::StringArray::fromLines (output);
+            juce::StringArray lines;
+
+            for (auto line : rawLines)
+                if (line.trim().startsWithChar ('{'))
+                    lines.add (line);
+
             require (lines.size() >= 4, "MCP E2E expected at least 4 response lines, got " + juce::String (lines.size()));
 
             assertMcpResult (parseMcpLine (lines, 0), 1);
@@ -1353,6 +1466,9 @@ namespace
             auto snapshotText = asObject (snapshotContent.getArray()->getReference (0), "MCP snapshot content").getProperty ("text").toString();
             require (snapshotText.contains ("JUCE Logo"),
                      "MCP snapshot did not include JUCE Logo");
+            auto parsedSnapshot = juce::JSON::parse (snapshotText);
+            require (asObject (parsedSnapshot, "MCP parsed snapshot").getProperty ("mode").toString() == "interesting",
+                     "MCP DemoRunner snapshot should default to interesting JSON");
 
             auto screenshotResult = assertMcpResult (parseMcpLine (lines, 3), 4);
             auto screenshotContent = asObject (screenshotResult, "MCP screenshot").getProperty ("content");

@@ -143,6 +143,30 @@ namespace
         {
             auto* error = responseObject->getProperty ("error").getDynamicObject();
             auto message = error != nullptr ? error->getProperty ("message").toString() : "Unknown automation error";
+
+            if (error != nullptr)
+            {
+                auto code = error->getProperty ("code").toString();
+
+                if (code.isNotEmpty())
+                    message = code + ": " + message;
+
+                auto matchCount = error->getProperty ("matchCount");
+
+                if (!matchCount.isVoid())
+                    message << "\nmatchCount=" << matchCount.toString();
+
+                auto matches = error->getProperty ("matches");
+
+                if (!matches.isVoid())
+                    message << "\nmatches=" << juce::JSON::toString (matches, true);
+
+                auto suggested = error->getProperty ("suggestedNextCommand").toString();
+
+                if (suggested.isNotEmpty())
+                    message << "\nsuggestedNextCommand=" << suggested;
+            }
+
             throw std::runtime_error (message.toStdString());
         }
 
@@ -322,6 +346,65 @@ namespace
             params.setProperty ("locator", locator);
     }
 
+    void addSnapshotOptions (juce::StringArray& args, juce::DynamicObject& params)
+    {
+        auto mode = optionValue (args, "--mode");
+
+        if (hasFlag (args, "--full"))
+            mode = "full";
+
+        if (hasFlag (args, "--interesting"))
+            mode = "interesting";
+
+        if (hasFlag (args, "--minimal"))
+            mode = "minimal";
+
+        if (mode.isNotEmpty())
+            params.setProperty ("mode", mode);
+
+        auto ref = optionValue (args, "--ref");
+
+        if (ref.isNotEmpty())
+            params.setProperty ("ref", ref);
+
+        auto target = optionValue (args, "--target");
+
+        if (target.isNotEmpty())
+            params.setProperty ("target", target);
+
+        auto since = optionValue (args, "--since");
+
+        if (since.isNotEmpty())
+            params.setProperty ("since", since);
+
+        auto maxNodes = optionValue (args, "--max-nodes");
+
+        if (maxNodes.isNotEmpty())
+            params.setProperty ("maxNodes", maxNodes.getIntValue());
+
+        auto maxChildren = optionValue (args, "--max-children");
+
+        if (maxChildren.isNotEmpty())
+            params.setProperty ("maxChildrenPerContainer", maxChildren.getIntValue());
+
+        auto maxText = optionValue (args, "--max-text");
+
+        if (maxText.isNotEmpty())
+            params.setProperty ("maxTextLength", maxText.getIntValue());
+
+        if (hasFlag (args, "--include-hidden"))
+            params.setProperty ("includeHidden", true);
+
+        if (hasFlag (args, "--exclude-disabled"))
+            params.setProperty ("includeDisabled", false);
+
+        if (hasFlag (args, "--no-actions"))
+            params.setProperty ("includeActions", false);
+
+        if (hasFlag (args, "--no-bounds"))
+            params.setProperty ("includeBounds", false);
+    }
+
     void addActionOptions (juce::StringArray& args, juce::DynamicObject& params)
     {
         auto timeout = optionValue (args, "--timeout-ms", optionValue (args, "--timeout"));
@@ -433,13 +516,42 @@ namespace
             tool ("juce_locator",
                   "Find JUCE components by Playwright-style locator fields.",
                   toolSchema ({ { "session", stringSchema() }, { "locator", locatorSchema() } }, { "locator" })),
-            tool ("juce_snapshot",
-                  "Return a compact Playwright-style snapshot of a JUCE component tree.",
+            tool ("juce_count",
+                  "Count JUCE components matching Playwright-style locator fields without returning the component tree.",
+                  toolSchema ({ { "session", stringSchema() }, { "locator", locatorSchema() } }, { "locator" })),
+            tool ("juce_describe",
+                  "Describe one component by ref or strict locator, including compact state, ancestors, children, and action hints.",
                   toolSchema ({ { "session", stringSchema() },
+                                { "ref", stringSchema() },
+                                { "locator", locatorSchema() },
+                                { "mode", object ({ { "type", "string" },
+                                                     { "enum", array ({ "interesting", "full", "minimal" }) },
+                                                     { "default", "interesting" } }) },
+                                { "depth", object ({ { "type", "number" }, { "default", 2 } }) },
+                                { "includeHidden", booleanSchema() },
+                                { "includeActions", booleanSchema() },
+                                { "includeBounds", booleanSchema() } })),
+            tool ("juce_snapshot",
+                  "Return a token-efficient Playwright-style snapshot of a JUCE component tree. Defaults to mode=interesting and format=json.",
+                  toolSchema ({ { "session", stringSchema() },
+                                { "mode", object ({ { "type", "string" },
+                                                     { "enum", array ({ "interesting", "full", "minimal" }) },
+                                                     { "default", "interesting" } }) },
                                 { "format", object ({ { "type", "string" },
                                                        { "enum", array ({ "text", "json" }) },
-                                                       { "default", "text" } }) },
-                                { "depth", object ({ { "type", "number" }, { "default", 8 } }) } })),
+                                                       { "default", "json" } }) },
+                                { "depth", object ({ { "type", "number" }, { "default", 8 } }) },
+                                { "target", stringSchema() },
+                                { "ref", stringSchema() },
+                                { "locator", locatorSchema() },
+                                { "since", stringSchema() },
+                                { "includeHidden", booleanSchema() },
+                                { "includeDisabled", booleanSchema() },
+                                { "includeActions", booleanSchema() },
+                                { "includeBounds", booleanSchema() },
+                                { "maxNodes", numberSchema() },
+                                { "maxChildrenPerContainer", numberSchema() },
+                                { "maxTextLength", numberSchema() } })),
             tool ("juce_screenshot",
                   "Capture a PNG screenshot of the root or a component ref.",
                   toolSchema ({ { "session", stringSchema() },
@@ -578,6 +690,8 @@ namespace
         if (name == "juce_snapshot") return "snapshot";
         if (name == "juce_capabilities") return "capabilities";
         if (name == "juce_locator") return "locator";
+        if (name == "juce_count") return "count";
+        if (name == "juce_describe") return "describe";
         if (name == "juce_screenshot") return "screenshot";
         if (name == "juce_click") return "click";
         if (name == "juce_dblclick") return "dblclick";
@@ -665,6 +779,15 @@ namespace
         if (method.isEmpty())
             throw std::runtime_error (("Unknown melatonin MCP tool: " + name).toStdString());
 
+        if (name == "juce_snapshot")
+        {
+            if (args->getProperty ("format").isVoid())
+                args->setProperty ("format", "json");
+
+            if (args->getProperty ("mode").isVoid())
+                args->setProperty ("mode", "interesting");
+        }
+
         auto result = request (*sessionObject, method, arguments);
 
         if (name == "juce_screenshot")
@@ -693,7 +816,7 @@ namespace
         if (name == "juce_snapshot" && args->getProperty ("format").toString() == "json")
             return mcpTextContent (juce::JSON::toString (result, true));
 
-        if (name == "juce_locator")
+        if (name == "juce_locator" || name == "juce_count" || name == "juce_describe")
             return mcpTextContent (juce::JSON::toString (result, true));
 
         if (auto* resultObject = result.getDynamicObject())
@@ -798,6 +921,7 @@ namespace
                 if (text.isNotEmpty())
                 {
                     std::cout << text.toStdString();
+                    std::cout.flush();
                     return;
                 }
 
@@ -806,12 +930,14 @@ namespace
                 if (file.isNotEmpty())
                 {
                     std::cout << file.toStdString() << "\n";
+                    std::cout.flush();
                     return;
                 }
             }
         }
 
         std::cout << juce::JSON::toString (result, true).toStdString() << "\n";
+        std::cout.flush();
     }
 
     void printHelp()
@@ -825,7 +951,9 @@ namespace
             << "  melatonin-ui -s <session> trace-start --file trace.json\n"
             << "  melatonin-ui -s <session> trace-stop\n"
             << "  melatonin-ui -s <session> locator [--role role] [--name text] [--text text] [--selected] [--format json]\n"
-            << "  melatonin-ui -s <session> snapshot [--format text|json] [--depth n]\n"
+            << "  melatonin-ui -s <session> count [locator options]\n"
+            << "  melatonin-ui -s <session> describe <ref>|[locator options] [--depth n] [--full|--interesting|--minimal]\n"
+            << "  melatonin-ui -s <session> snapshot [--json|--format text|json] [--full|--interesting|--minimal] [--depth n] [--ref ref] [locator options]\n"
             << "  melatonin-ui -s <session> screenshot [--target root|--ref m1-1] [--source auto|component|native] --file /tmp/root.png\n"
             << "  melatonin-ui -s <session> click <ref> [--button left|right|middle] [--click-count n] [--position x,y]\n"
             << "  melatonin-ui -s <session> dblclick <ref>\n"
@@ -854,7 +982,8 @@ namespace
             << "  melatonin-ui -s <session> set-bounds <ref> --x n --y n --w n --h n\n"
             << "  melatonin-ui -s <session> set-property <ref> <name> <value>\n"
             << "  melatonin-ui -s <session> wait --ms n\n"
-            << "  melatonin-ui -s <session> wait-for-text <text> [--timeout-ms n]\n";
+            << "  melatonin-ui -s <session> wait-for-text <text> [--timeout-ms n]\n"
+            << "\nSnapshot defaults to a compact interesting tree. Use --full for the complete component dump.\n";
     }
 
     juce::String popFront (juce::StringArray& args)
@@ -925,9 +1054,13 @@ int main (int argc, char* argv[])
     {
         if (command == "snapshot")
         {
-            auto format = optionValue (args, "--format", "text");
+            auto format = hasFlag (args, "--json") ? juce::String ("json") : optionValue (args, "--format", "text");
             auto depth = optionValue (args, "--depth", "8").getIntValue();
-            auto result = request (*sessionObject, "snapshot", object ({ { "format", format }, { "depth", depth } }));
+            auto locator = parseLocatorOptions (args);
+            auto params = object ({ { "format", format }, { "depth", depth } });
+            addSnapshotOptions (args, *params.getDynamicObject());
+            addLocatorIfPresent (*params.getDynamicObject(), locator);
+            auto result = request (*sessionObject, "snapshot", params);
             printResult (result, format == "json");
             return 0;
         }
@@ -938,6 +1071,39 @@ int main (int argc, char* argv[])
             auto locator = parseLocatorOptions (args);
             auto params = object ({ { "locator", locator } });
             printResult (request (*sessionObject, "locator", params), format == "json");
+            return 0;
+        }
+
+        if (command == "count")
+        {
+            auto locator = parseLocatorOptions (args);
+            auto params = object ({ { "locator", locator } });
+            printResult (request (*sessionObject, "count", params), true);
+            return 0;
+        }
+
+        if (command == "describe")
+        {
+            auto format = hasFlag (args, "--json") ? juce::String ("json") : optionValue (args, "--format", "json");
+            auto depth = optionValue (args, "--depth");
+            auto locator = parseLocatorOptions (args);
+            auto params = object ({});
+            addSnapshotOptions (args, *params.getDynamicObject());
+
+            if (depth.isNotEmpty())
+                params.getDynamicObject()->setProperty ("depth", depth.getIntValue());
+
+            if (!locator.isVoid())
+            {
+                params.getDynamicObject()->setProperty ("locator", locator);
+            }
+            else if (!args.isEmpty())
+            {
+                params.getDynamicObject()->setProperty ("ref", args[0]);
+            }
+
+            auto result = request (*sessionObject, "describe", params);
+            printResult (result, format == "json");
             return 0;
         }
 

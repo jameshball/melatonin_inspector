@@ -127,6 +127,18 @@ namespace melatonin
             bool attachedRoot = false;
         };
 
+        struct SnapshotOptions
+        {
+            juce::String mode = "interesting";
+            bool includeHidden = false;
+            bool includeDisabled = true;
+            bool includeActions = true;
+            bool includeBounds = true;
+            int maxNodes = 400;
+            int maxChildrenPerContainer = 25;
+            int maxTextLength = 120;
+        };
+
         juce::Component::SafePointer<juce::Component> root;
         AutomationOptions options;
         std::unique_ptr<juce::StreamingSocket> listener;
@@ -252,9 +264,7 @@ namespace melatonin
             if (auto* resultObject = result.getDynamicObject())
             {
                 if (resultObject->getProperty ("__error").isString())
-                    return responseError (id,
-                                          resultObject->getProperty ("__error").toString(),
-                                          resultObject->getProperty ("message").toString());
+                    return responseError (id, *resultObject);
             }
 
             return responseOk (id, result);
@@ -357,6 +367,7 @@ namespace melatonin
 
                 juce::DynamicObject snapshotParams;
                 snapshotParams.setProperty ("format", "json");
+                snapshotParams.setProperty ("mode", "full");
                 snapshotParams.setProperty ("depth", getInt (params, "depth", 12));
                 auto result = snapshot (snapshotParams);
                 auto* snapshotObject = result.getDynamicObject();
@@ -567,7 +578,12 @@ namespace melatonin
                                                      { "screenshots", true },
                                                      { "nativeScreenshots", true },
                                                      { "tracing", true },
-                                                     { "windows", true } }) },
+                                                     { "windows", true },
+                                                     { "tokenEfficientSnapshots", true },
+                                                     { "snapshotModes", stringArrayToVar ({ "interesting", "full", "minimal" }) },
+                                                     { "scopedSnapshots", true },
+                                                     { "describe", true },
+                                                     { "count", true } }) },
                              { "security", object ({ { "allowInput", options.allowInput },
                                                      { "allowMutation", options.allowMutation },
                                                      { "allowFileWrite", options.allowFileWrite },
@@ -643,21 +659,123 @@ namespace melatonin
             if (root == nullptr)
                 return error ("no_root", "No root component is attached.");
 
+            auto snapshotOpts = snapshotOptions (params);
+
+            if (snapshotOpts.mode != "interesting" && snapshotOpts.mode != "full" && snapshotOpts.mode != "minimal")
+                return error ("invalid_snapshot_mode", "Snapshot mode must be interesting, full, or minimal.");
+
+            const auto ref = getString (params, "ref", {});
+            auto* refTarget = ref.isNotEmpty() ? getTargetComponent (ref) : nullptr;
+
+            if (ref.isNotEmpty() && refTarget == nullptr)
+                return errorWithSuggestion ("stale_ref", "Run snapshot again.", "snapshot");
+
+            auto locatorValue = params.getProperty ("locator");
+            auto* locatorObject = locatorValue.getDynamicObject();
+
+            if (ref.isNotEmpty() && locatorObject != nullptr)
+                return error ("invalid_locator", "Pass either ref or locator, not both.");
+
             refs.clear();
             ++generation;
 
             const auto maxDepth = getInt (params, "depth", 8);
             const auto format = getString (params, "format", "text");
-            auto tree = serializeAutomationTree (juce::jmax (0, maxDepth));
+            auto tree = scopedSnapshotTree (params, refTarget, juce::jmax (0, maxDepth));
+
+            if (isError (tree))
+                return tree;
+
+            if (locatorObject != nullptr)
+            {
+                juce::Array<juce::var> matches;
+                collectLocatorMatchNodes (matches, tree, *locatorObject, ! snapshotOpts.includeHidden);
+
+                const auto nthValue = locatorObject->getProperty ("nth");
+
+                if (!nthValue.isVoid())
+                {
+                    const auto nth = (int) nthValue;
+
+                    if (juce::isPositiveAndBelow (nth, matches.size()))
+                    {
+                        auto selected = matches[nth];
+                        matches.clear();
+                        matches.add (selected);
+                    }
+                    else
+                    {
+                        matches.clear();
+                    }
+                }
+
+                if (matches.isEmpty())
+                    return locatorError ("locator_not_found", "Locator did not match any component.", *locatorObject, matches);
+
+                if (matches.size() > 1)
+                    return locatorError ("strict_mode_violation", "Locator matched " + juce::String (matches.size()) + " components.", *locatorObject, matches);
+
+                tree = matches.getFirst();
+            }
+
+            auto outputTree = snapshotOpts.mode == "full" ? tree : interestingSnapshotTree (tree, snapshotOpts);
+
+            if (outputTree.isVoid())
+                outputTree = tree;
 
             juce::String text;
-            appendTextSnapshot (text, tree, 0);
-            const auto stateHash = calculateStateHash (tree);
+            appendTextSnapshot (text, outputTree, 0);
+            const auto stateHash = calculateStateHash (outputTree);
+            const auto since = getString (params, "since", {});
+
+            if (since.isNotEmpty() && since == stateHash)
+            {
+                juce::Array<juce::var> changedRefs;
+                auto unchanged = object ({ { "generation", generation },
+                                           { "mode", snapshotOpts.mode },
+                                           { "stateHash", stateHash },
+                                           { "beforeStateHash", since },
+                                           { "afterStateHash", stateHash },
+                                           { "changed", false },
+                                           { "changedRefs", changedRefs },
+                                           { "changedSummary", "Snapshot has not changed." },
+                                           { "suggestedNextSnapshotScope", suggestedSnapshotScope (params) },
+                                           { "text", juce::String() } });
+
+                if (format == "json")
+                    return unchanged;
+
+                return unchanged;
+            }
+
+            juce::Array<juce::var> changedRefs;
+            collectRefs (outputTree, changedRefs);
+            auto result = object ({ { "generation", generation },
+                                    { "mode", snapshotOpts.mode },
+                                    { "stateHash", stateHash },
+                                    { "text", text } });
+
+            auto* resultObject = result.getDynamicObject();
+
+            if (resultObject != nullptr && since.isNotEmpty())
+            {
+                resultObject->setProperty ("beforeStateHash", since);
+                resultObject->setProperty ("afterStateHash", stateHash);
+                resultObject->setProperty ("changed", true);
+                resultObject->setProperty ("changedRefs", changedRefs);
+                resultObject->setProperty ("changedSummary", "Snapshot changed; inspect the returned context.");
+                resultObject->setProperty ("suggestedNextSnapshotScope", suggestedSnapshotScope (params));
+            }
 
             if (format == "json")
-                return object ({ { "generation", generation }, { "stateHash", stateHash }, { "tree", tree }, { "text", text } });
+            {
+                if (resultObject != nullptr)
+                    resultObject->setProperty ("tree", outputTree);
 
-            return object ({ { "generation", generation }, { "stateHash", stateHash }, { "text", text } });
+                return result;
+            }
+
+            return result;
         }
 
         juce::var locator (juce::DynamicObject& params)
@@ -688,21 +806,56 @@ namespace melatonin
             if (!resolution.error.isVoid())
                 return resolution.error;
 
-            juce::DynamicObject snapshotParams;
-            snapshotParams.setProperty ("format", "json");
-            snapshotParams.setProperty ("depth", 64);
-            auto query = resolveLocatorQuery (params, false, true);
+            auto snapshotOpts = snapshotOptions (params);
+            snapshotOpts.includeHidden = getBool (params, "includeHidden", true);
+            snapshotOpts.maxChildrenPerContainer = getInt (params, "maxChildrenPerContainer", 12);
+            snapshotOpts.maxNodes = getInt (params, "maxNodes", 80);
 
-            if (isError (query))
-                return query;
+            refs.clear();
+            ++generation;
 
-            auto* queryObject = query.getDynamicObject();
-            auto matches = queryObject != nullptr ? queryObject->getProperty ("matches") : juce::var();
+            juce::Array<juce::var> ancestors;
+            juce::Array<juce::Component*> ancestorComponents;
 
-            if (matches.isArray() && !matches.getArray()->isEmpty())
-                return object ({ { "match", matches.getArray()->getReference (0) } });
+            for (auto* parent = resolution.component->getParentComponent(); parent != nullptr; parent = parent->getParentComponent())
+                ancestorComponents.add (parent);
 
-            return error ("locator_not_found", "Locator did not match any component.");
+            for (int i = ancestorComponents.size(); --i >= 0;)
+            {
+                auto ancestor = serializeComponent (*ancestorComponents[i], 0, 0);
+                auto compactAncestor = snapshotOpts.mode == "full" ? ancestor : interestingSnapshotTree (ancestor, snapshotOpts);
+
+                if (!compactAncestor.isVoid())
+                    ancestors.add (compactAncestor);
+            }
+
+            const auto depth = juce::jlimit (0, 16, getInt (params, "depth", 2));
+            auto detailTree = serializeComponent (*resolution.component, 0, depth);
+            auto detail = snapshotOpts.mode == "full" ? detailTree : interestingSnapshotTree (detailTree, snapshotOpts);
+
+            if (detail.isVoid())
+                detail = detailTree;
+
+            auto* detailObject = detail.getDynamicObject();
+
+            if (detailObject == nullptr)
+                return error ("describe_failed", "Could not describe target component.");
+
+            juce::String text;
+            appendTextSnapshot (text, detail, 0);
+
+            auto children = detailObject->getProperty ("children");
+            auto result = object ({ { "generation", generation },
+                                    { "mode", snapshotOpts.mode },
+                                    { "stateHash", calculateStateHash (detail) },
+                                    { "match", summarizeNode (*detailObject) },
+                                    { "detail", detail },
+                                    { "ancestors", ancestors },
+                                    { "children", children },
+                                    { "actions", actionHintsForNode (*detailObject) },
+                                    { "text", text } });
+
+            return result;
         }
 
         juce::var screenshot (juce::DynamicObject& params)
@@ -1831,11 +1984,11 @@ namespace melatonin
             if (ref.isNotEmpty())
             {
                 auto* target = getTargetComponent (ref);
-                return { target, target != nullptr ? juce::var() : error ("stale_ref", "Run snapshot again.") };
+                return { target, target != nullptr ? juce::var() : errorWithSuggestion ("stale_ref", "Run snapshot again.", "snapshot") };
             }
 
             if (locatorObject == nullptr)
-                return { nullptr, error ("stale_ref", "Run snapshot again.") };
+                return { nullptr, errorWithSuggestion ("stale_ref", "Run snapshot again.", "snapshot") };
 
             auto result = resolveLocatorQuery (*locatorObject, defaultVisible, requireStrict);
 
@@ -1846,12 +1999,12 @@ namespace melatonin
             auto matches = resultObject != nullptr ? resultObject->getProperty ("matches") : juce::var();
 
             if (!matches.isArray() || matches.getArray()->isEmpty())
-                return { nullptr, error ("locator_not_found", "Locator did not match any component.") };
+                return { nullptr, errorWithSuggestion ("locator_not_found", "Locator did not match any component.", "snapshot") };
 
             auto refValue = asObjectProperty (matches.getArray()->getReference (0), "ref");
             auto* target = getTargetComponent (refValue);
 
-            return { target, target != nullptr ? juce::var() : error ("stale_ref", "Run snapshot again.") };
+            return { target, target != nullptr ? juce::var() : errorWithSuggestion ("stale_ref", "Run snapshot again.", "snapshot") };
         }
 
         juce::DynamicObject* getLocatorObject (juce::DynamicObject& params) const
@@ -1922,10 +2075,13 @@ namespace melatonin
             if (requireStrict)
             {
                 if (matches.isEmpty())
-                    return error ("locator_not_found", "Locator did not match any component.");
+                    return locatorError ("locator_not_found", "Locator did not match any component.", *locatorObject, matches);
 
                 if (matches.size() > 1)
-                    return error ("strict_mode_violation", "Locator matched " + juce::String (matches.size()) + " components: " + summarizeMatches (matches));
+                    return locatorError ("strict_mode_violation",
+                                         "Locator matched " + juce::String (matches.size()) + " components: " + summarizeMatches (matches),
+                                         *locatorObject,
+                                         matches);
             }
 
             return object ({ { "generation", generation },
@@ -2189,7 +2345,16 @@ namespace melatonin
                                    "target",
                                    "source",
                                    "format",
+                                   "mode",
                                    "depth",
+                                   "since",
+                                   "includeHidden",
+                                   "includeDisabled",
+                                   "includeActions",
+                                   "includeBounds",
+                                   "maxNodes",
+                                   "maxChildrenPerContainer",
+                                   "maxTextLength",
                                    "timeoutMs",
                                    "force",
                                    "trial",
@@ -2688,6 +2853,550 @@ namespace melatonin
             return component.getLocalBounds();
         }
 
+        SnapshotOptions snapshotOptions (juce::DynamicObject& params) const
+        {
+            SnapshotOptions snapshotOpts;
+            snapshotOpts.mode = getString (params, "mode", "interesting").trim().toLowerCase();
+
+            if ((bool) params.getProperty ("full"))
+                snapshotOpts.mode = "full";
+
+            if ((bool) params.getProperty ("interesting"))
+                snapshotOpts.mode = "interesting";
+
+            if ((bool) params.getProperty ("minimal"))
+                snapshotOpts.mode = "minimal";
+
+            snapshotOpts.includeHidden = getBool (params, "includeHidden", false);
+            snapshotOpts.includeDisabled = getBool (params, "includeDisabled", true);
+            snapshotOpts.includeActions = getBool (params, "includeActions", true);
+            snapshotOpts.includeBounds = getBool (params, "includeBounds", true);
+            snapshotOpts.maxNodes = juce::jlimit (1, 5000, getInt (params, "maxNodes", snapshotOpts.mode == "minimal" ? 200 : 400));
+            snapshotOpts.maxChildrenPerContainer = juce::jlimit (1, 500, getInt (params, "maxChildrenPerContainer", snapshotOpts.mode == "minimal" ? 12 : 25));
+            snapshotOpts.maxTextLength = juce::jlimit (16, 2048, getInt (params, "maxTextLength", snapshotOpts.mode == "minimal" ? 80 : 120));
+
+            if (snapshotOpts.mode == "minimal" && params.getProperty ("includeBounds").isVoid())
+                snapshotOpts.includeBounds = false;
+
+            return snapshotOpts;
+        }
+
+        juce::var scopedSnapshotTree (juce::DynamicObject& params, juce::Component* refTarget, int maxDepth)
+        {
+            if (refTarget != nullptr)
+                return serializeComponent (*refTarget, 0, maxDepth);
+
+            auto target = getString (params, "target", {});
+
+            if (target.isNotEmpty() && target != "root")
+            {
+                if (auto* targetWindow = automationWindowForId (target))
+                    return serializeComponent (*targetWindow, 0, maxDepth);
+
+                return error ("window_not_found", "No automation window matched target: " + target);
+            }
+
+            return serializeAutomationTree (maxDepth);
+        }
+
+        static juce::var interestingSnapshotTree (const juce::var& tree, const SnapshotOptions& options)
+        {
+            auto remainingNodes = options.maxNodes;
+            return filterInterestingNode (tree, options, 0, remainingNodes);
+        }
+
+        static juce::var filterInterestingNode (const juce::var& node, const SnapshotOptions& options, int depth, int& remainingNodes)
+        {
+            auto* source = node.getDynamicObject();
+
+            if (source == nullptr || remainingNodes <= 0)
+                return {};
+
+            const auto visible = (bool) source->getProperty ("visible");
+            const auto enabled = (bool) source->getProperty ("enabled");
+
+            if (depth > 0 && !options.includeHidden && !visible)
+                return {};
+
+            if (depth > 0 && !options.includeDisabled && !enabled)
+                return {};
+
+            juce::Array<juce::var> filteredChildren;
+            int omittedChildren = 0;
+            auto sourceChildren = source->getProperty ("children");
+
+            if (sourceChildren.isArray())
+            {
+                for (auto& child : *sourceChildren.getArray())
+                {
+                    auto filteredChild = filterInterestingNode (child, options, depth + 1, remainingNodes);
+
+                    if (!filteredChild.isVoid() && filteredChildren.size() < options.maxChildrenPerContainer)
+                    {
+                        filteredChildren.add (filteredChild);
+                    }
+                    else
+                    {
+                        ++omittedChildren;
+                    }
+                }
+            }
+
+            const auto interesting = depth == 0 || isInterestingNode (*source);
+
+            if (!interesting && filteredChildren.isEmpty())
+                return {};
+
+            --remainingNodes;
+
+            auto copy = compactSnapshotNode (*source, options);
+            auto* copyObject = copy.getDynamicObject();
+
+            if (copyObject != nullptr)
+            {
+                copyObject->setProperty ("children", filteredChildren);
+
+                if (omittedChildren > 0)
+                    copyObject->setProperty ("omittedChildren", omittedChildren);
+
+                if (options.includeActions)
+                {
+                    auto actions = actionHintsForNode (*source);
+
+                    if (actions.isArray() && !actions.getArray()->isEmpty())
+                        copyObject->setProperty ("actions", actions);
+                }
+            }
+
+            return copy;
+        }
+
+        static juce::var compactSnapshotNode (juce::DynamicObject& source, const SnapshotOptions& options)
+        {
+            auto* node = new juce::DynamicObject();
+
+            for (auto name : { "ref",
+                               "name",
+                               "componentId",
+                               "componentName",
+                               "class",
+                               "role",
+                               "title",
+                               "value",
+                               "enabled",
+                               "visible",
+                               "focused",
+                               "selectable",
+                               "selected",
+                               "expandable",
+                               "expanded",
+                               "collapsed",
+                               "toggleable",
+                               "toggleState",
+                               "checked",
+                               "editable",
+                               "readOnly",
+                               "selectedIndex",
+                               "selectedId",
+                               "selectedText",
+                               "minimum",
+                               "maximum",
+                               "interval",
+                               "tabNames",
+                               "currentTabIndex",
+                               "currentTab",
+                               "scrollX",
+                               "scrollY",
+                               "viewWidth",
+                               "viewHeight",
+                               "contentWidth",
+                               "contentHeight",
+                               "rowCount",
+                               "selectedRow",
+                               "selectedRows",
+                               "documentCount",
+                               "layoutMode",
+                               "activeDocument" })
+            {
+                copyCompactProperty (*node, source, name, options);
+            }
+
+            if (options.includeBounds)
+                copyCompactProperty (*node, source, "bounds", options);
+
+            auto optionsValue = source.getProperty ("options");
+
+            if (optionsValue.isArray())
+            {
+                juce::Array<juce::var> compactOptions;
+                auto* sourceOptions = optionsValue.getArray();
+                const auto optionCount = sourceOptions != nullptr ? sourceOptions->size() : 0;
+                const auto optionsToCopy = juce::jmin (optionCount, options.maxChildrenPerContainer);
+
+                for (int i = 0; i < optionsToCopy; ++i)
+                    compactOptions.add (sourceOptions->getReference (i));
+
+                node->setProperty ("options", compactOptions);
+
+                if (optionCount > optionsToCopy)
+                    node->setProperty ("omittedOptions", optionCount - optionsToCopy);
+            }
+
+            return juce::var (node);
+        }
+
+        static void copyCompactProperty (juce::DynamicObject& target,
+                                         juce::DynamicObject& source,
+                                         const juce::Identifier& name,
+                                         const SnapshotOptions& options)
+        {
+            auto value = source.getProperty (name);
+
+            if (value.isVoid())
+                return;
+
+            if (value.isString())
+            {
+                auto text = value.toString();
+
+                if (text.length() > options.maxTextLength)
+                    value = text.substring (0, options.maxTextLength) + "...";
+            }
+
+            target.setProperty (name, value);
+        }
+
+        static bool isInterestingNode (juce::DynamicObject& node)
+        {
+            if (hasMeaningfulState (node) || isActionableNode (node) || isSemanticContainer (node))
+                return true;
+
+            const auto role = node.getProperty ("role").toString();
+
+            if ((role == "label" || role == "staticText" || role == "image") && hasMeaningfulText (node))
+                return true;
+
+            if (hasMeaningfulIdentifier (node) && ((bool) node.getProperty ("visible") || hasMeaningfulState (node)))
+                return true;
+
+            return false;
+        }
+
+        static bool hasMeaningfulIdentifier (juce::DynamicObject& node)
+        {
+            return node.getProperty ("componentId").toString().isNotEmpty()
+                   || node.getProperty ("componentName").toString().isNotEmpty()
+                   || node.getProperty ("title").toString().isNotEmpty();
+        }
+
+        static bool hasMeaningfulText (juce::DynamicObject& node)
+        {
+            return node.getProperty ("name").toString().trim().isNotEmpty()
+                   || node.getProperty ("title").toString().trim().isNotEmpty()
+                   || node.getProperty ("value").toString().trim().isNotEmpty();
+        }
+
+        static bool hasMeaningfulState (juce::DynamicObject& node)
+        {
+            if ((bool) node.getProperty ("focused")
+                || (bool) node.getProperty ("selected")
+                || (bool) node.getProperty ("expanded")
+                || (bool) node.getProperty ("collapsed")
+                || (bool) node.getProperty ("toggleState")
+                || (bool) node.getProperty ("checked")
+                || (bool) node.getProperty ("editable"))
+                return true;
+
+            if (!node.getProperty ("selectedIndex").isVoid() && (int) node.getProperty ("selectedIndex") >= 0)
+                return true;
+
+            if (!node.getProperty ("selectedId").isVoid() && (int) node.getProperty ("selectedId") != 0)
+                return true;
+
+            if (node.getProperty ("selectedText").toString().isNotEmpty()
+                || node.getProperty ("currentTab").toString().isNotEmpty()
+                || node.getProperty ("activeDocument").toString().isNotEmpty())
+                return true;
+
+            if (!node.getProperty ("rowCount").isVoid() && (int) node.getProperty ("rowCount") > 0)
+                return true;
+
+            if (!node.getProperty ("selectedRow").isVoid() && (int) node.getProperty ("selectedRow") >= 0)
+                return true;
+
+            if (!node.getProperty ("documentCount").isVoid() && (int) node.getProperty ("documentCount") > 0)
+                return true;
+
+            if ((!node.getProperty ("scrollX").isVoid() && (int) node.getProperty ("scrollX") != 0)
+                || (!node.getProperty ("scrollY").isVoid() && (int) node.getProperty ("scrollY") != 0))
+                return true;
+
+            return false;
+        }
+
+        static bool isActionableNode (juce::DynamicObject& node)
+        {
+            const auto role = node.getProperty ("role").toString();
+            const auto className = node.getProperty ("class").toString();
+
+            if (role == "button"
+                || role == "toggleButton"
+                || role == "radioButton"
+                || role == "comboBox"
+                || role == "slider"
+                || role == "editableText"
+                || role == "menuItem"
+                || role == "listItem"
+                || role == "treeItem"
+                || role == "scrollBar"
+                || role == "hyperlink")
+            {
+                return true;
+            }
+
+            return className.contains ("Button")
+                   || className.contains ("Slider")
+                   || className.contains ("TextEditor")
+                   || className.contains ("ComboBox")
+                   || className.contains ("TabbedComponent")
+                   || className.contains ("Viewport")
+                   || className.contains ("ListBox")
+                   || className.contains ("TableListBox")
+                   || className.contains ("TreeView");
+        }
+
+        static bool isSemanticContainer (juce::DynamicObject& node)
+        {
+            const auto role = node.getProperty ("role").toString();
+            const auto className = node.getProperty ("class").toString();
+
+            return role == "window"
+                   || role == "dialogWindow"
+                   || role == "popupMenu"
+                   || role == "table"
+                   || role == "tree"
+                   || role == "list"
+                   || className.contains ("TabbedComponent")
+                   || className.contains ("Viewport")
+                   || className.contains ("ListBox")
+                   || className.contains ("TableListBox")
+                   || className.contains ("TreeView")
+                   || className.contains ("MultiDocumentPanel")
+                   || className.contains ("DocumentWindow")
+                   || className.contains ("AlertWindow");
+        }
+
+        static juce::var actionHintsForNode (juce::DynamicObject& node)
+        {
+            juce::StringArray actions;
+            const auto role = node.getProperty ("role").toString();
+            const auto className = node.getProperty ("class").toString();
+            const auto enabled = node.getProperty ("enabled").isVoid() || (bool) node.getProperty ("enabled");
+
+            if (!enabled)
+                return stringArrayToVar (actions);
+
+            auto add = [&actions] (const juce::String& action) {
+                if (!actions.contains (action))
+                    actions.add (action);
+            };
+
+            if (role == "button" || className.contains ("Button"))
+                add ("click");
+
+            if ((bool) node.getProperty ("toggleable") || role == "toggleButton" || role == "radioButton")
+            {
+                add ("click");
+                add ("set_checked");
+            }
+
+            if (role == "slider" || className.contains ("Slider"))
+            {
+                add ("set_value");
+                add ("drag");
+            }
+
+            if (role == "editableText" || className.contains ("TextEditor") || (bool) node.getProperty ("editable"))
+            {
+                add ("fill");
+                add ("press");
+                add ("click");
+            }
+
+            if (role == "comboBox" || className.contains ("ComboBox") || node.getProperty ("options").isArray())
+            {
+                add ("select_option");
+                add ("click");
+            }
+
+            if (className.contains ("TabbedComponent") || node.getProperty ("tabNames").isArray())
+            {
+                add ("select_tab");
+                add ("click");
+            }
+
+            if (className.contains ("ListBox") || role == "list" || role == "listItem")
+            {
+                add ("select_option");
+                add ("click");
+            }
+
+            if (className.contains ("Viewport") || role == "scrollBar")
+            {
+                add ("wheel");
+                add ("scroll");
+            }
+
+            if (role == "tree" || role == "treeItem" || className.contains ("TreeView"))
+            {
+                add ("click");
+                add ("select_option");
+            }
+
+            if (role == "window" || role == "dialogWindow" || className.contains ("DocumentWindow") || className.contains ("AlertWindow"))
+                add ("snapshot");
+
+            return stringArrayToVar (actions);
+        }
+
+        static void collectLocatorMatchNodes (juce::Array<juce::var>& matches,
+                                              const juce::var& node,
+                                              juce::DynamicObject& locatorObject,
+                                              bool defaultVisible)
+        {
+            auto* object = node.getDynamicObject();
+
+            if (object == nullptr)
+                return;
+
+            if (matchesLocatorNode (*object, locatorObject, defaultVisible))
+                matches.add (node);
+
+            auto children = object->getProperty ("children");
+
+            if (children.isArray())
+                for (auto& child : *children.getArray())
+                    collectLocatorMatchNodes (matches, child, locatorObject, defaultVisible);
+        }
+
+        static bool matchesLocatorNode (juce::DynamicObject& node, juce::DynamicObject& locatorObject, bool defaultVisible)
+        {
+            const auto exact = (bool) locatorObject.getProperty ("exact");
+
+            if (!matchesOptionalString (node, locatorObject, "role", "role", exact)) return false;
+            if (!matchesOptionalText (searchableName (node), locatorObject, "name", exact)) return false;
+            if (!matchesOptionalText (searchableText (node), locatorObject, "text", exact)) return false;
+            if (!matchesOptionalString (node, locatorObject, "componentId", "componentId", true)) return false;
+            if (!matchesOptionalString (node, locatorObject, "componentId", "testId", true)) return false;
+            if (!matchesOptionalString (node, locatorObject, "componentName", "componentName", true)) return false;
+            if (!matchesOptionalString (node, locatorObject, "class", "class", exact)) return false;
+            if (!matchesOptionalString (node, locatorObject, "value", "value", exact)) return false;
+            if (!matchesOptionalText (searchableText (node), locatorObject, "hasText", exact)) return false;
+
+            if (!matchesOptionalBool (node, locatorObject, "enabled", "enabled")) return false;
+            if (!matchesOptionalBool (node, locatorObject, "focused", "focused")) return false;
+            if (!matchesOptionalBool (node, locatorObject, "selected", "selected")) return false;
+
+            if (!locatorObject.getProperty ("visible").isVoid())
+            {
+                if (!matchesOptionalBool (node, locatorObject, "visible", "visible"))
+                    return false;
+            }
+            else if (defaultVisible && !(bool) node.getProperty ("visible"))
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        static juce::var summarizeNodesForContext (const juce::Array<juce::var>& nodes)
+        {
+            juce::Array<juce::var> summaries;
+            const auto count = juce::jmin (nodes.size(), 10);
+
+            for (int i = 0; i < count; ++i)
+                if (auto* object = nodes[i].getDynamicObject())
+                    summaries.add (summarizeNode (*object));
+
+            return juce::var (summaries);
+        }
+
+        static juce::var locatorError (const juce::String& code,
+                                       const juce::String& message,
+                                       juce::DynamicObject& locatorObject,
+                                       const juce::Array<juce::var>& matches)
+        {
+            return object ({ { "__error", code },
+                             { "message", message },
+                             { "locator", locatorSummary (locatorObject) },
+                             { "matchCount", matches.size() },
+                             { "matches", summarizeNodesForContext (matches) },
+                             { "suggestedNextCommand", "snapshot" } });
+        }
+
+        static juce::var locatorSummary (juce::DynamicObject& locatorObject)
+        {
+            auto* summary = new juce::DynamicObject();
+
+            for (auto name : { "role",
+                               "name",
+                               "text",
+                               "componentId",
+                               "componentName",
+                               "testId",
+                               "class",
+                               "value",
+                               "hasText",
+                               "nth",
+                               "exact",
+                               "visible",
+                               "enabled",
+                               "focused",
+                               "selected" })
+            {
+                auto value = locatorObject.getProperty (name);
+
+                if (!value.isVoid())
+                    summary->setProperty (name, value);
+            }
+
+            return juce::var (summary);
+        }
+
+        static void collectRefs (const juce::var& node, juce::Array<juce::var>& refs)
+        {
+            auto* object = node.getDynamicObject();
+
+            if (object == nullptr)
+                return;
+
+            auto ref = object->getProperty ("ref").toString();
+
+            if (ref.isNotEmpty())
+                refs.add (ref);
+
+            auto children = object->getProperty ("children");
+
+            if (children.isArray())
+                for (auto& child : *children.getArray())
+                    collectRefs (child, refs);
+        }
+
+        static juce::String suggestedSnapshotScope (juce::DynamicObject& params)
+        {
+            auto ref = getString (params, "ref", {});
+
+            if (ref.isNotEmpty())
+                return "ref:" + ref;
+
+            if (params.getProperty ("locator").isObject())
+                return "locator";
+
+            auto target = getString (params, "target", {});
+            return target.isNotEmpty() ? target : juce::String ("root");
+        }
+
         juce::var serializeAutomationTree (int maxDepth)
         {
             auto windows = automationWindows();
@@ -2964,6 +3673,16 @@ namespace melatonin
                 << " [ref=" << object->getProperty ("ref").toString()
                 << " box=" << box;
 
+            auto componentId = object->getProperty ("componentId").toString();
+
+            if (componentId.isNotEmpty())
+                out << " id=" << componentId;
+
+            auto componentName = object->getProperty ("componentName").toString();
+
+            if (componentName.isNotEmpty() && componentName != object->getProperty ("name").toString())
+                out << " componentName=" << componentName;
+
             auto role = object->getProperty ("role").toString();
 
             if (role.isNotEmpty())
@@ -2979,6 +3698,40 @@ namespace melatonin
 
             if (!(bool) object->getProperty ("enabled"))
                 out << " disabled=true";
+
+            if ((bool) object->getProperty ("selected"))
+                out << " selected=true";
+
+            if ((bool) object->getProperty ("checked"))
+                out << " checked=true";
+
+            auto currentTab = object->getProperty ("currentTab").toString();
+
+            if (currentTab.isNotEmpty())
+                out << " currentTab=\"" << currentTab << "\"";
+
+            auto actions = object->getProperty ("actions");
+
+            if (actions.isArray())
+            {
+                juce::StringArray actionNames;
+
+                for (auto& action : *actions.getArray())
+                    actionNames.add (action.toString());
+
+                if (!actionNames.isEmpty())
+                    out << " actions=" << actionNames.joinIntoString (",");
+            }
+
+            auto omittedChildren = object->getProperty ("omittedChildren");
+
+            if (!omittedChildren.isVoid() && (int) omittedChildren > 0)
+                out << " omittedChildren=" << omittedChildren.toString();
+
+            auto omittedOptions = object->getProperty ("omittedOptions");
+
+            if (!omittedOptions.isVoid() && (int) omittedOptions > 0)
+                out << " omittedOptions=" << omittedOptions.toString();
 
             out << "]\n";
 
@@ -3237,6 +3990,15 @@ namespace melatonin
             return object ({ { "__error", code }, { "message", message } });
         }
 
+        static juce::var errorWithSuggestion (const juce::String& code,
+                                              const juce::String& message,
+                                              const juce::String& suggestedNextCommand)
+        {
+            return object ({ { "__error", code },
+                             { "message", message },
+                             { "suggestedNextCommand", suggestedNextCommand } });
+        }
+
         static juce::String responseOk (const juce::String& id, const juce::var& result)
         {
             return juce::JSON::toString (object ({ { "id", id }, { "ok", true }, { "result", result } }), true);
@@ -3247,6 +4009,26 @@ namespace melatonin
             return juce::JSON::toString (object ({ { "id", id },
                                                    { "ok", false },
                                                    { "error", object ({ { "code", code }, { "message", message } }) } }),
+                                         true);
+        }
+
+        static juce::String responseError (const juce::String& id, juce::DynamicObject& errorObject)
+        {
+            auto* publicError = new juce::DynamicObject();
+            publicError->setProperty ("code", errorObject.getProperty ("__error"));
+            publicError->setProperty ("message", errorObject.getProperty ("message"));
+
+            for (auto& property : errorObject.getProperties())
+            {
+                const auto name = property.name.toString();
+
+                if (name != "__error" && name != "message")
+                    publicError->setProperty (property.name, property.value);
+            }
+
+            return juce::JSON::toString (object ({ { "id", id },
+                                                   { "ok", false },
+                                                   { "error", juce::var (publicError) } }),
                                          true);
         }
 
@@ -3266,6 +4048,12 @@ namespace melatonin
         {
             auto value = object.getProperty (name);
             return value.isVoid() ? fallback : (double) value;
+        }
+
+        static bool getBool (juce::DynamicObject& object, const juce::Identifier& name, bool fallback)
+        {
+            auto value = object.getProperty (name);
+            return value.isVoid() ? fallback : (bool) value;
         }
 
         static juce::String defaultSessionName()

@@ -126,6 +126,85 @@ namespace
         return *object;
     }
 
+    juce::var parseJsonOutput (const juce::String& output, const juce::String& context)
+    {
+        auto parsed = juce::JSON::parse (output.trim());
+
+        if (parsed.isObject() || parsed.isArray())
+            return parsed;
+
+        auto objectStart = output.indexOfChar ('{');
+        auto arrayStart = output.indexOfChar ('[');
+        auto start = objectStart < 0 ? arrayStart : (arrayStart < 0 ? objectStart : juce::jmin (objectStart, arrayStart));
+
+        if (start >= 0)
+        {
+            auto depth = 0;
+            auto inString = false;
+            auto escaped = false;
+
+            for (int i = start; i < output.length(); ++i)
+            {
+                const auto c = output[i];
+
+                if (inString)
+                {
+                    if (escaped)
+                    {
+                        escaped = false;
+                    }
+                    else if (c == '\\')
+                    {
+                        escaped = true;
+                    }
+                    else if (c == '"')
+                    {
+                        inString = false;
+                    }
+
+                    continue;
+                }
+
+                if (c == '"')
+                {
+                    inString = true;
+                    continue;
+                }
+
+                if (c == '{' || c == '[')
+                    ++depth;
+                else if (c == '}' || c == ']')
+                    --depth;
+
+                if (depth == 0)
+                {
+                    parsed = juce::JSON::parse (output.substring (start, i + 1));
+
+                    if (parsed.isObject() || parsed.isArray())
+                        return parsed;
+
+                    break;
+                }
+            }
+        }
+
+        for (auto line : juce::StringArray::fromLines (output))
+        {
+            auto trimmed = line.trim();
+
+            if (trimmed.startsWithChar ('{') || trimmed.startsWithChar ('['))
+            {
+                parsed = juce::JSON::parse (trimmed);
+
+                if (parsed.isObject() || parsed.isArray())
+                    return parsed;
+            }
+        }
+
+        require (false, context + " did not contain JSON\n" + output);
+        return {};
+    }
+
     juce::var findNode (const juce::var& node, const std::function<bool (juce::DynamicObject&)>& predicate)
     {
         auto* object = node.getDynamicObject();
@@ -290,7 +369,7 @@ namespace
             runMcpSmokeCheck();
 
             auto snapshot = readSnapshot();
-            auto capabilities = juce::JSON::parse (runCli ({ "-s", sessionName, "capabilities" }));
+            auto capabilities = parseJsonOutput (runCli ({ "-s", sessionName, "capabilities" }), "capabilities");
             auto& capabilitiesObject = asObject (capabilities, "capabilities");
             require ((int) capabilitiesObject.getProperty ("protocolVersion") == 1, "capabilities returned the wrong protocol version");
 
@@ -302,7 +381,7 @@ namespace
             require (security.getProperty ("artifactRoot").toString() == screenshotDirectory.getFullPathName(),
                      "capabilities returned the wrong artifact root");
 
-            auto windows = juce::JSON::parse (runCli ({ "-s", sessionName, "windows" }));
+            auto windows = parseJsonOutput (runCli ({ "-s", sessionName, "windows" }), "windows");
             auto windowsArray = asObject (windows, "windows").getProperty ("windows");
             require (windowsArray.isArray() && windowsArray.getArray()->size() == 1, "windows should expose the owned root window");
             require (asObject (windowsArray.getArray()->getReference (0), "root window").getProperty ("id").toString() == "root",
@@ -314,7 +393,7 @@ namespace
             auto tracedFailure = runCliExpectFailure ({ "-s", sessionName, "click", "--component-id", "trace.missing", "--timeout-ms", "50" });
             require (tracedFailure.contains ("Timed out") || tracedFailure.contains ("Locator did not match"),
                      "expected traced missing locator click to fail\n" + tracedFailure);
-            auto traceStop = juce::JSON::parse (runCli ({ "-s", sessionName, "trace-stop" }));
+            auto traceStop = parseJsonOutput (runCli ({ "-s", sessionName, "trace-stop" }), "trace-stop");
             require ((int) asObject (traceStop, "trace-stop").getProperty ("events") >= 2, "trace-stop did not record events");
             auto traceJson = juce::JSON::parse (traceFile.loadFileAsString());
             auto traceEvents = asObject (traceJson, "trace file").getProperty ("events");
@@ -345,6 +424,20 @@ namespace
 
             require (foundStructuredTraceEvent, "trace file did not include structured params/result/timing fields");
             require (foundFailedTraceEvent, "trace file did not include the expected failed action event");
+
+            auto interestingText = runCli ({ "-s", sessionName, "snapshot" });
+            auto fullText = runCli ({ "-s", sessionName, "snapshot", "--full", "--depth", "12" });
+            require (interestingText.contains ("actions="), "default interesting snapshot should include action hints\n" + interestingText);
+            require (interestingText.contains ("fixture.tabs"), "default interesting snapshot should include named controls\n" + interestingText);
+            require (interestingText.length() < fullText.length(), "interesting snapshot should be smaller than full snapshot");
+
+            auto interestingSnapshot = parseJsonOutput (runCli ({ "-s", sessionName, "snapshot", "--json", "--depth", "12" }), "interesting snapshot");
+            auto& interestingObject = asObject (interestingSnapshot, "interesting snapshot");
+            require (interestingObject.getProperty ("mode").toString() == "interesting", "snapshot should default to interesting mode");
+            require (!findByComponentName (interestingSnapshot, "controls.slider").isVoid(),
+                     "interesting snapshot should retain visible sliders");
+            require (findByComponentName (interestingSnapshot, "editor.text").isVoid(),
+                     "interesting snapshot should omit hidden tab contents by default");
 
             auto snapshotAgain = readSnapshot();
             auto& snapshotObject = asObject (snapshot, "snapshot");
@@ -396,6 +489,19 @@ namespace
             auto valueLocator = readLocator ({ "--value", "25" });
             require ((int) asObject (valueLocator, "value locator").getProperty ("count") >= 1,
                      "value locator did not find slider value 25");
+
+            auto countResult = parseJsonOutput (runCli ({ "-s", sessionName, "count", "--role", "button", "--name", "Duplicate" }), "count");
+            require ((int) asObject (countResult, "count result").getProperty ("count") == 2,
+                     "count did not expose the duplicate button count");
+
+            auto scopedByLocator = parseJsonOutput (runCli ({ "-s", sessionName, "snapshot", "--json", "--component-id", "controls.slider" }), "scoped locator snapshot");
+            require (asObject (asObject (scopedByLocator, "scoped snapshot").getProperty ("tree"), "scoped tree").getProperty ("componentName").toString() == "controls.slider",
+                     "locator-scoped snapshot did not return the slider subtree");
+
+            auto describedSlider = parseJsonOutput (runCli ({ "-s", sessionName, "describe", "--component-id", "controls.slider" }), "describe slider");
+            auto& describedSliderObject = asObject (describedSlider, "describe slider");
+            require (describedSliderObject.getProperty ("text").toString().contains ("set_value"),
+                     "describe did not expose slider action hints\n" + juce::JSON::toString (describedSlider, true));
 
             auto hiddenLocator = readLocator ({ "--component-name", "editor.text", "--hidden" });
             require ((int) asObject (hiddenLocator, "hidden locator").getProperty ("count") == 1,
@@ -452,7 +558,30 @@ namespace
             auto buttonScreenshot = screenshotDirectory.getChildFile ("melatonin-automation-e2e-button.png");
             auto editorButton = findByComponentName (snapshot, "nav.editor");
             auto editorButtonBounds = boundsOf (editorButton);
-            runCli ({ "-s", sessionName, "screenshot", "--ref", asObject (editorButton, "nav.editor").getProperty ("ref").toString(), "--file", buttonScreenshot.getFullPathName() });
+            auto editorButtonRef = asObject (editorButton, "nav.editor").getProperty ("ref").toString();
+
+            auto describedByRef = parseJsonOutput (runCli ({ "-s",
+                                                             sessionName,
+                                                             "describe",
+                                                             editorButtonRef }),
+                                                   "describe ref");
+            require (asObject (describedByRef, "describe ref").getProperty ("text").toString().contains ("click"),
+                     "describe <ref> did not expose button action hints");
+            editorButtonRef = asObject (asObject (describedByRef, "describe ref").getProperty ("detail"), "describe detail").getProperty ("ref").toString();
+
+            auto scopedByRef = parseJsonOutput (runCli ({ "-s",
+                                                          sessionName,
+                                                          "snapshot",
+                                                          "--json",
+                                                          "--ref",
+                                                          editorButtonRef }),
+                                                "scoped ref snapshot");
+            auto& scopedRefTree = asObject (asObject (scopedByRef, "ref scoped snapshot").getProperty ("tree"), "ref scoped tree");
+            require (scopedRefTree.getProperty ("componentName").toString() == "nav.editor",
+                     "ref-scoped snapshot did not return the requested component");
+            editorButtonRef = scopedRefTree.getProperty ("ref").toString();
+
+            runCli ({ "-s", sessionName, "screenshot", "--ref", editorButtonRef, "--file", buttonScreenshot.getFullPathName() });
             assertPng (buttonScreenshot, "button screenshot");
             assertPngSize (buttonScreenshot, editorButtonBounds.getWidth(), editorButtonBounds.getHeight(), "button screenshot");
 
@@ -830,11 +959,19 @@ namespace
                 R"({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})",
                 R"({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"juce_capabilities","arguments":{"session":"automation_fixture"}}})",
                 R"({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"juce_locator","arguments":{"session":"automation_fixture","locator":{"componentName":"controls.slider"}}}})",
-                R"({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"juce_snapshot","arguments":{"session":"automation_fixture","format":"text","depth":12}}})"
+                R"({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"juce_snapshot","arguments":{"session":"automation_fixture","depth":12}}})",
+                R"({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"juce_count","arguments":{"session":"automation_fixture","locator":{"role":"button","name":"Duplicate"}}}})",
+                R"({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"juce_describe","arguments":{"session":"automation_fixture","locator":{"componentName":"controls.slider"}}}})"
             });
 
-            auto lines = juce::StringArray::fromLines (output);
-            require (lines.size() >= 5, "MCP smoke expected at least 5 response lines, got " + juce::String (lines.size()) + "\n" + output);
+            auto rawLines = juce::StringArray::fromLines (output);
+            juce::StringArray lines;
+
+            for (auto line : rawLines)
+                if (line.trim().startsWithChar ('{'))
+                    lines.add (line);
+
+            require (lines.size() >= 7, "MCP smoke expected at least 7 response lines, got " + juce::String (lines.size()) + "\n" + output);
 
             auto initializeResult = assertMcpResult (parseMcpLine (lines, 0), 1);
             auto& initialize = asObject (initializeResult, "MCP initialize result");
@@ -849,6 +986,8 @@ namespace
 
             bool foundSnapshotTool = false;
             bool foundLocatorTool = false;
+            bool foundCountTool = false;
+            bool foundDescribeTool = false;
             bool foundWaitForTextTool = false;
             bool foundDoubleClickTool = false;
             bool foundRightClickTool = false;
@@ -865,6 +1004,12 @@ namespace
 
                 if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_locator")
                     foundLocatorTool = true;
+
+                if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_count")
+                    foundCountTool = true;
+
+                if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_describe")
+                    foundDescribeTool = true;
 
                 if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_wait_for_text")
                     foundWaitForTextTool = true;
@@ -893,6 +1038,8 @@ namespace
 
             require (foundSnapshotTool, "MCP tools/list did not expose juce_snapshot");
             require (foundLocatorTool, "MCP tools/list did not expose juce_locator");
+            require (foundCountTool, "MCP tools/list did not expose juce_count");
+            require (foundDescribeTool, "MCP tools/list did not expose juce_describe");
             require (foundWaitForTextTool, "MCP tools/list did not expose juce_wait_for_text");
             require (foundDoubleClickTool, "MCP tools/list did not expose juce_dblclick");
             require (foundRightClickTool, "MCP tools/list did not expose juce_right_click");
@@ -923,11 +1070,31 @@ namespace
 
             auto text = asObject (content.getArray()->getReference (0), "MCP snapshot content").getProperty ("text").toString();
             require (text.contains ("fixture.tabs"), "MCP snapshot content did not include the fixture tree");
+
+            auto parsedMcpSnapshot = juce::JSON::parse (text);
+            require (asObject (parsedMcpSnapshot, "MCP parsed snapshot").getProperty ("mode").toString() == "interesting",
+                     "MCP snapshot should default to interesting JSON");
+
+            auto countCallResult = assertMcpResult (parseMcpLine (lines, 5), 6);
+            auto countText = asObject (asObject (countCallResult, "MCP count result").getProperty ("content").getArray()->getReference (0),
+                                       "MCP count content")
+                                 .getProperty ("text")
+                                 .toString();
+            auto parsedCount = juce::JSON::parse (countText);
+            require ((int) asObject (parsedCount, "MCP parsed count").getProperty ("count") == 2,
+                     "MCP count did not return the expected duplicate count");
+
+            auto describeCallResult = assertMcpResult (parseMcpLine (lines, 6), 7);
+            auto describeText = asObject (asObject (describeCallResult, "MCP describe result").getProperty ("content").getArray()->getReference (0),
+                                          "MCP describe content")
+                                    .getProperty ("text")
+                                    .toString();
+            require (describeText.contains ("set_value"), "MCP describe did not expose slider action hints\n" + describeText);
         }
 
         juce::var readSnapshot()
         {
-            auto parsed = juce::JSON::parse (runCli ({ "-s", sessionName, "snapshot", "--format", "json", "--depth", "12" }));
+            auto parsed = parseJsonOutput (runCli ({ "-s", sessionName, "snapshot", "--full", "--format", "json", "--depth", "12" }), "snapshot");
             asObject (parsed, "snapshot");
             return parsed;
         }
@@ -937,7 +1104,7 @@ namespace
             auto args = makeArgs ({ "-s", sessionName, "locator", "--format", "json" });
             args.addArray (makeArgs (locatorArgs));
 
-            auto parsed = juce::JSON::parse (runCli (args));
+            auto parsed = parseJsonOutput (runCli (args), "locator");
             asObject (parsed, "locator");
             return parsed;
         }

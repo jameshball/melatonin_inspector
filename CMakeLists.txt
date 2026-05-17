@@ -59,7 +59,9 @@ if (MelatoninInspector_IS_TOP_LEVEL)
     if (MELATONIN_INSPECTOR_BUILD_CLI)
         juce_add_console_app(melatonin-ui VERSION 1.0.0)
         target_sources(melatonin-ui PRIVATE tools/melatonin_ui.cpp)
-        target_compile_definitions(melatonin-ui PRIVATE JUCE_USE_CURL=0)
+        target_compile_definitions(melatonin-ui PRIVATE
+            JUCE_USE_CURL=0
+            JUCE_DISABLE_JUCE_VERSION_PRINTING=1)
         target_link_libraries(melatonin-ui PRIVATE
             juce::juce_core
             juce::juce_recommended_config_flags
