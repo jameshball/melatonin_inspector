@@ -488,6 +488,11 @@ namespace
         return object ({ { "type", "number" } });
     }
 
+    juce::var timeoutMsSchema()
+    {
+        return object ({ { "type", "number" }, { "default", 5000 } });
+    }
+
     juce::var booleanSchema()
     {
         return object ({ { "type", "boolean" } });
@@ -529,6 +534,35 @@ namespace
 
         if (required.size() > 0)
             schema.getDynamicObject()->setProperty ("required", array (required));
+
+        return schema;
+    }
+
+    juce::var timedToolSchema (std::initializer_list<std::pair<juce::String, juce::var>> properties,
+                               std::initializer_list<juce::var> required = {})
+    {
+        auto schema = toolSchema (properties, required);
+
+        if (auto* schemaObject = schema.getDynamicObject())
+            if (auto* propertiesObject = schemaObject->getProperty ("properties").getDynamicObject())
+                propertiesObject->setProperty ("timeoutMs", timeoutMsSchema());
+
+        return schema;
+    }
+
+    juce::var targetActionToolSchema (std::initializer_list<std::pair<juce::String, juce::var>> properties,
+                                      std::initializer_list<juce::var> required = {})
+    {
+        auto schema = timedToolSchema (properties, required);
+
+        if (auto* schemaObject = schema.getDynamicObject())
+        {
+            if (auto* propertiesObject = schemaObject->getProperty ("properties").getDynamicObject())
+            {
+                propertiesObject->setProperty ("force", booleanSchema());
+                propertiesObject->setProperty ("trial", booleanSchema());
+            }
+        }
 
         return schema;
     }
@@ -597,134 +631,134 @@ namespace
                                 { "maxTextLength", numberSchema() } })),
             tool ("juce_screenshot",
                   "Capture a PNG screenshot of the root or a component ref.",
-                  toolSchema ({ { "session", stringSchema() },
-                                { "target", object ({ { "type", "string" }, { "default", "root" } }) },
-                                { "ref", stringSchema() },
-                                { "locator", locatorSchema() },
-                                { "source", object ({ { "type", "string" },
-                                                      { "enum", array ({ "auto", "component", "native" }) },
-                                                      { "default", "component" } }) },
-                                { "file", stringSchema() },
-                                { "clipX", numberSchema() },
-                                { "clipY", numberSchema() },
-                                { "clipW", numberSchema() },
-                                { "clipH", numberSchema() },
-                                { "scale", numberSchema() },
-                                { "includeBase64", booleanSchema() } })),
+                  timedToolSchema ({ { "session", stringSchema() },
+                                     { "target", object ({ { "type", "string" }, { "default", "root" } }) },
+                                     { "ref", stringSchema() },
+                                     { "locator", locatorSchema() },
+                                     { "source", object ({ { "type", "string" },
+                                                           { "enum", array ({ "auto", "component", "native" }) },
+                                                           { "default", "component" } }) },
+                                     { "file", stringSchema() },
+                                     { "clipX", numberSchema() },
+                                     { "clipY", numberSchema() },
+                                     { "clipW", numberSchema() },
+                                     { "clipH", numberSchema() },
+                                     { "scale", numberSchema() },
+                                     { "includeBase64", booleanSchema() } })),
             tool ("juce_click",
                   "Click a component ref and return a fresh snapshot.",
-                  toolSchema ({ { "session", stringSchema() },
-                                { "ref", stringSchema() },
-                                { "locator", locatorSchema() },
-                                { "button", stringSchema() },
-                                { "clickCount", numberSchema() },
-                                { "position", object ({ { "type", "object" },
-                                                        { "properties", object ({ { "x", numberSchema() }, { "y", numberSchema() } }) } }) } })),
+                  targetActionToolSchema ({ { "session", stringSchema() },
+                                            { "ref", stringSchema() },
+                                            { "locator", locatorSchema() },
+                                            { "button", stringSchema() },
+                                            { "clickCount", numberSchema() },
+                                            { "position", object ({ { "type", "object" },
+                                                                    { "properties", object ({ { "x", numberSchema() }, { "y", numberSchema() } }) } }) } })),
             tool ("juce_dblclick",
                   "Double-click a component ref or locator and return a fresh snapshot.",
-                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() } })),
+                  targetActionToolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() } })),
             tool ("juce_right_click",
                   "Right-click a component ref or locator and return a fresh snapshot.",
-                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() } })),
+                  targetActionToolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() } })),
             tool ("juce_click_xy",
                   "Click window-local coordinates and return a fresh snapshot.",
-                  toolSchema ({ { "session", stringSchema() }, { "target", stringSchema() }, { "x", numberSchema() }, { "y", numberSchema() } }, { "x", "y" })),
+                  timedToolSchema ({ { "session", stringSchema() }, { "target", stringSchema() }, { "x", numberSchema() }, { "y", numberSchema() } }, { "x", "y" })),
             tool ("juce_hover",
                   "Move the mouse to window-local coordinates.",
-                  toolSchema ({ { "session", stringSchema() }, { "target", stringSchema() }, { "x", numberSchema() }, { "y", numberSchema() } }, { "x", "y" })),
+                  timedToolSchema ({ { "session", stringSchema() }, { "target", stringSchema() }, { "x", numberSchema() }, { "y", numberSchema() } }, { "x", "y" })),
             tool ("juce_mouse_move",
                   "Move the mouse to window-local coordinates.",
-                  toolSchema ({ { "session", stringSchema() }, { "target", stringSchema() }, { "x", numberSchema() }, { "y", numberSchema() } }, { "x", "y" })),
+                  timedToolSchema ({ { "session", stringSchema() }, { "target", stringSchema() }, { "x", numberSchema() }, { "y", numberSchema() } }, { "x", "y" })),
             tool ("juce_mouse_down",
                   "Send a mouse-down event at window-local coordinates.",
-                  toolSchema ({ { "session", stringSchema() }, { "target", stringSchema() }, { "x", numberSchema() }, { "y", numberSchema() } }, { "x", "y" })),
+                  timedToolSchema ({ { "session", stringSchema() }, { "target", stringSchema() }, { "x", numberSchema() }, { "y", numberSchema() } }, { "x", "y" })),
             tool ("juce_mouse_up",
                   "Send a mouse-up event at window-local coordinates.",
-                  toolSchema ({ { "session", stringSchema() }, { "target", stringSchema() }, { "x", numberSchema() }, { "y", numberSchema() } }, { "x", "y" })),
+                  timedToolSchema ({ { "session", stringSchema() }, { "target", stringSchema() }, { "x", numberSchema() }, { "y", numberSchema() } }, { "x", "y" })),
             tool ("juce_wheel",
                   "Send a mouse wheel event at window-local coordinates.",
-                  toolSchema ({ { "session", stringSchema() }, { "target", stringSchema() }, { "x", numberSchema() }, { "y", numberSchema() }, { "deltaX", numberSchema() }, { "deltaY", numberSchema() } }, { "x", "y" })),
+                  timedToolSchema ({ { "session", stringSchema() }, { "target", stringSchema() }, { "x", numberSchema() }, { "y", numberSchema() }, { "deltaX", numberSchema() }, { "deltaY", numberSchema() } }, { "x", "y" })),
             tool ("juce_drag_xy",
                   "Drag from one window-local point to another.",
-                  toolSchema ({ { "session", stringSchema() }, { "target", stringSchema() }, { "x", numberSchema() }, { "y", numberSchema() }, { "toX", numberSchema() }, { "toY", numberSchema() }, { "steps", numberSchema() } }, { "x", "y", "toX", "toY" })),
+                  timedToolSchema ({ { "session", stringSchema() }, { "target", stringSchema() }, { "x", numberSchema() }, { "y", numberSchema() }, { "toX", numberSchema() }, { "toY", numberSchema() }, { "steps", numberSchema() } }, { "x", "y", "toX", "toY" })),
             tool ("juce_type",
                   "Type text into a component ref and return a fresh snapshot.",
-                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "text", stringSchema() } }, { "text" })),
+                  targetActionToolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "text", stringSchema() } }, { "text" })),
             tool ("juce_fill",
                   "Replace text in a TextEditor or Label.",
-                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "text", stringSchema() } }, { "text" })),
+                  targetActionToolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "text", stringSchema() } }, { "text" })),
             tool ("juce_clear",
                   "Clear text from a TextEditor or Label.",
-                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() } })),
+                  targetActionToolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() } })),
             tool ("juce_press",
                   "Press a key and return a fresh snapshot.",
-                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "key", stringSchema() } }, { "key" })),
+                  targetActionToolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "key", stringSchema() } }, { "key" })),
             tool ("juce_key_down",
                   "Send a key-down event, supporting chords such as Control+K.",
-                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "key", stringSchema() } }, { "key" })),
+                  targetActionToolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "key", stringSchema() } }, { "key" })),
             tool ("juce_key_up",
                   "Send a key-up event, supporting chords such as Control+K.",
-                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "key", stringSchema() } }, { "key" })),
+                  targetActionToolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "key", stringSchema() } }, { "key" })),
             tool ("juce_check",
                   "Set a toggleable button checked.",
-                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() } })),
+                  targetActionToolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() } })),
             tool ("juce_uncheck",
                   "Set a toggleable button unchecked.",
-                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() } })),
+                  targetActionToolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() } })),
             tool ("juce_set_checked",
                   "Set a toggleable button checked or unchecked.",
-                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "checked", booleanSchema() } }, { "checked" })),
+                  targetActionToolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "checked", booleanSchema() } }, { "checked" })),
             tool ("juce_set_value",
                   "Set a semantic value on a Slider or TextEditor.",
-                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "value", numberSchema() } }, { "value" })),
+                  targetActionToolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "value", numberSchema() } }, { "value" })),
             tool ("juce_select_option",
                   "Select a ComboBox option or ListBox row by text, index, or id.",
-                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "text", stringSchema() }, { "index", numberSchema() }, { "id", numberSchema() } })),
+                  targetActionToolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "text", stringSchema() }, { "index", numberSchema() }, { "id", numberSchema() } })),
             tool ("juce_select_tab",
                   "Select a TabbedComponent tab by name or index.",
-                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "name", stringSchema() }, { "index", numberSchema() } })),
+                  targetActionToolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "name", stringSchema() }, { "index", numberSchema() } })),
             tool ("juce_drag",
                   "Drag a component by a delta and return a fresh snapshot.",
-                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "dx", numberSchema() }, { "dy", numberSchema() }, { "steps", numberSchema() } })),
+                  targetActionToolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "dx", numberSchema() }, { "dy", numberSchema() }, { "steps", numberSchema() } })),
             tool ("juce_drag_to",
                   "Drag a source component to a target component center.",
-                  toolSchema ({ { "session", stringSchema() },
-                                { "ref", stringSchema() },
-                                { "locator", locatorSchema() },
-                                { "targetRef", stringSchema() },
-                                { "targetLocator", locatorSchema() },
-                                { "steps", numberSchema() } })),
+                  targetActionToolSchema ({ { "session", stringSchema() },
+                                            { "ref", stringSchema() },
+                                            { "locator", locatorSchema() },
+                                            { "targetRef", stringSchema() },
+                                            { "targetLocator", locatorSchema() },
+                                            { "steps", numberSchema() } })),
             tool ("juce_set_bounds",
                   "Set a component's bounds and return a fresh snapshot.",
-                  toolSchema ({ { "session", stringSchema() },
-                                { "ref", stringSchema() },
-                                { "locator", locatorSchema() },
-                                { "x", numberSchema() },
-                                { "y", numberSchema() },
-                                { "w", numberSchema() },
-                                { "h", numberSchema() } })),
+                  timedToolSchema ({ { "session", stringSchema() },
+                                     { "ref", stringSchema() },
+                                     { "locator", locatorSchema() },
+                                     { "x", numberSchema() },
+                                     { "y", numberSchema() },
+                                     { "w", numberSchema() },
+                                     { "h", numberSchema() } })),
             tool ("juce_set_property",
                   "Set a component property and return a fresh snapshot.",
-                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "name", stringSchema() }, { "value", valueSchema() } },
-                              { "name" })),
+                  timedToolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "name", stringSchema() }, { "value", valueSchema() } },
+                                   { "name" })),
             tool ("juce_wait",
                   "Wait briefly and return a fresh snapshot.",
                   toolSchema ({ { "session", stringSchema() }, { "ms", object ({ { "type", "number" }, { "default", 250 } }) } })),
             tool ("juce_wait_for_ref",
                   "Wait for a previously returned component ref to remain attached.",
-                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "timeoutMs", numberSchema() } }, { "ref" })),
+                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "timeoutMs", timeoutMsSchema() } }, { "ref" })),
             tool ("juce_wait_for_locator",
                   "Wait for a visible locator match unless the locator requests hidden components.",
-                  toolSchema ({ { "session", stringSchema() }, { "locator", locatorSchema() }, { "timeoutMs", numberSchema() } }, { "locator" })),
+                  toolSchema ({ { "session", stringSchema() }, { "locator", locatorSchema() }, { "timeoutMs", timeoutMsSchema() } }, { "locator" })),
             tool ("juce_wait_for_text",
                   "Wait for visible text in the component tree.",
-                  toolSchema ({ { "session", stringSchema() }, { "text", stringSchema() }, { "timeoutMs", numberSchema() }, { "exact", booleanSchema() }, { "visible", booleanSchema() } }, { "text" })),
+                  toolSchema ({ { "session", stringSchema() }, { "text", stringSchema() }, { "timeoutMs", timeoutMsSchema() }, { "exact", booleanSchema() }, { "visible", booleanSchema() } }, { "text" })),
             tool ("juce_wait_for_value",
                   "Wait for a semantic component value to match.",
-                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "value", stringSchema() }, { "timeoutMs", numberSchema() }, { "exact", booleanSchema() } }, { "value" })),
+                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "value", stringSchema() }, { "timeoutMs", timeoutMsSchema() }, { "exact", booleanSchema() } }, { "value" })),
             tool ("juce_wait_for_snapshot_change",
                   "Wait for the snapshot state hash to differ from a previous state hash.",
-                  toolSchema ({ { "session", stringSchema() }, { "stateHash", stringSchema() }, { "timeoutMs", numberSchema() } }, { "stateHash" }))
+                  toolSchema ({ { "session", stringSchema() }, { "stateHash", stringSchema() }, { "timeoutMs", timeoutMsSchema() } }, { "stateHash" }))
         });
     }
 

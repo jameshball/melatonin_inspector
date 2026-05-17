@@ -1007,70 +1007,88 @@ namespace
             auto tools = toolsList.getProperty ("tools");
             require (tools.isArray(), "MCP tools/list did not return a tools array");
 
-            bool foundSnapshotTool = false;
-            bool foundLocatorTool = false;
-            bool foundCountTool = false;
-            bool foundDescribeTool = false;
-            bool foundWaitForTextTool = false;
-            bool foundDoubleClickTool = false;
-            bool foundRightClickTool = false;
-            bool foundKeyDownTool = false;
-            bool foundKeyUpTool = false;
-            bool foundClearTool = false;
-            bool foundSetCheckedTool = false;
-            bool foundDragToTool = false;
+            auto findTool = [&tools] (const juce::String& toolName) -> juce::DynamicObject* {
+                for (const auto& toolInfo : *tools.getArray())
+                    if (auto* toolObject = toolInfo.getDynamicObject())
+                        if (toolObject->getProperty ("name").toString() == toolName)
+                            return toolObject;
 
-            for (const auto& toolInfo : *tools.getArray())
-            {
-                if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_snapshot")
-                    foundSnapshotTool = true;
+                return nullptr;
+            };
 
-                if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_locator")
-                    foundLocatorTool = true;
+            auto requireTool = [&findTool] (const juce::String& toolName) -> juce::DynamicObject& {
+                auto* toolObject = findTool (toolName);
+                require (toolObject != nullptr, "MCP tools/list did not expose " + toolName);
+                return *toolObject;
+            };
 
-                if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_count")
-                    foundCountTool = true;
+            auto requireSchemaProperty = [&requireTool] (const juce::String& toolName, const juce::String& propertyName) {
+                auto& toolObject = requireTool (toolName);
+                auto& inputSchema = asObject (toolObject.getProperty ("inputSchema"), toolName + " inputSchema");
+                auto& properties = asObject (inputSchema.getProperty ("properties"), toolName + " schema properties");
+                auto property = properties.getProperty (propertyName);
 
-                if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_describe")
-                    foundDescribeTool = true;
+                require (!property.isVoid(), toolName + " schema did not expose " + propertyName);
 
-                if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_wait_for_text")
-                    foundWaitForTextTool = true;
+                if (propertyName == "timeoutMs")
+                    require ((int) asObject (property, toolName + " timeoutMs schema").getProperty ("default") == 5000,
+                             toolName + " timeoutMs schema should advertise the 5000ms default");
+            };
 
-                if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_dblclick")
-                    foundDoubleClickTool = true;
+            auto requireSchemaProperties = [&requireSchemaProperty] (const juce::String& toolName, std::initializer_list<const char*> propertyNames) {
+                for (auto* propertyName : propertyNames)
+                    requireSchemaProperty (toolName, propertyName);
+            };
 
-                if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_right_click")
-                    foundRightClickTool = true;
+            for (auto* toolName : { "juce_snapshot",
+                                    "juce_locator",
+                                    "juce_count",
+                                    "juce_describe",
+                                    "juce_wait_for_text",
+                                    "juce_dblclick",
+                                    "juce_right_click",
+                                    "juce_key_down",
+                                    "juce_key_up",
+                                    "juce_clear",
+                                    "juce_set_checked",
+                                    "juce_drag_to" })
+                requireTool (toolName);
 
-                if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_key_down")
-                    foundKeyDownTool = true;
+            for (auto* toolName : { "juce_click",
+                                    "juce_dblclick",
+                                    "juce_right_click",
+                                    "juce_type",
+                                    "juce_fill",
+                                    "juce_clear",
+                                    "juce_press",
+                                    "juce_key_down",
+                                    "juce_key_up",
+                                    "juce_check",
+                                    "juce_uncheck",
+                                    "juce_set_checked",
+                                    "juce_set_value",
+                                    "juce_select_option",
+                                    "juce_select_tab",
+                                    "juce_drag",
+                                    "juce_drag_to" })
+                requireSchemaProperties (toolName, { "timeoutMs", "force", "trial" });
 
-                if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_key_up")
-                    foundKeyUpTool = true;
-
-                if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_clear")
-                    foundClearTool = true;
-
-                if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_set_checked")
-                    foundSetCheckedTool = true;
-
-                if (asObject (toolInfo, "MCP tool").getProperty ("name").toString() == "juce_drag_to")
-                    foundDragToTool = true;
-            }
-
-            require (foundSnapshotTool, "MCP tools/list did not expose juce_snapshot");
-            require (foundLocatorTool, "MCP tools/list did not expose juce_locator");
-            require (foundCountTool, "MCP tools/list did not expose juce_count");
-            require (foundDescribeTool, "MCP tools/list did not expose juce_describe");
-            require (foundWaitForTextTool, "MCP tools/list did not expose juce_wait_for_text");
-            require (foundDoubleClickTool, "MCP tools/list did not expose juce_dblclick");
-            require (foundRightClickTool, "MCP tools/list did not expose juce_right_click");
-            require (foundKeyDownTool, "MCP tools/list did not expose juce_key_down");
-            require (foundKeyUpTool, "MCP tools/list did not expose juce_key_up");
-            require (foundClearTool, "MCP tools/list did not expose juce_clear");
-            require (foundSetCheckedTool, "MCP tools/list did not expose juce_set_checked");
-            require (foundDragToTool, "MCP tools/list did not expose juce_drag_to");
+            for (auto* toolName : { "juce_screenshot",
+                                    "juce_click_xy",
+                                    "juce_hover",
+                                    "juce_mouse_move",
+                                    "juce_mouse_down",
+                                    "juce_mouse_up",
+                                    "juce_wheel",
+                                    "juce_drag_xy",
+                                    "juce_set_bounds",
+                                    "juce_set_property",
+                                    "juce_wait_for_ref",
+                                    "juce_wait_for_locator",
+                                    "juce_wait_for_text",
+                                    "juce_wait_for_value",
+                                    "juce_wait_for_snapshot_change" })
+                requireSchemaProperty (toolName, "timeoutMs");
 
             auto capabilitiesCallResult = assertMcpResult (parseMcpLine (lines, 2), 3);
             auto& capabilitiesCall = asObject (capabilitiesCallResult, "MCP capabilities result");
