@@ -103,7 +103,7 @@ if (MelatoninInspector_IS_TOP_LEVEL)
             "${MELATONIN_DEMORUNNER_MAIN}")
         string(REPLACE
             "setContentOwned (new MainComponent(), false);"
-            "auto* mainComponent = new MainComponent();\n            setContentOwned (mainComponent, false);\n\n           #if MELATONIN_INSPECTOR_ENABLE_AUTOMATION\n            melatonin::AutomationOptions automationOptions;\n            automationOptions.sessionName = \"juce_demorunner\";\n            automationOptions.allowFileWrite = true;\n            automationOptions.artifactRoot = File::getSpecialLocation (File::tempDirectory);\n            automationInspector = std::make_unique<melatonin::Inspector> (*mainComponent, false);\n            automationInspector->enableAutomation (automationOptions);\n           #endif"
+            "auto* mainComponent = new MainComponent();\n            setContentOwned (mainComponent, false);\n\n           #if MELATONIN_INSPECTOR_ENABLE_AUTOMATION\n            melatonin::AutomationOptions automationOptions;\n            automationOptions.sessionName = \"juce_demorunner\";\n            automationOptions.allowFileWrite = true;\n            automationOptions.artifactRoot = File::getSpecialLocation (File::tempDirectory);\n            automationInspector = std::make_unique<melatonin::Inspector> (*mainComponent, false);\n            automationInspector->enableAutomation (automationOptions);\n            automationInspector->setVisible (false);\n           #endif"
             MELATONIN_DEMORUNNER_MAIN
             "${MELATONIN_DEMORUNNER_MAIN}")
         string(REPLACE

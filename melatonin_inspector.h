@@ -124,6 +124,7 @@ namespace melatonin
             if (root == nullptr)
                 return;
 
+            automation.reset();
             automation = std::make_unique<AutomationController> (*root, std::move (options));
 #else
             juce::ignoreUnused (options);

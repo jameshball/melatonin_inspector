@@ -5,18 +5,21 @@
 #include <cstdlib>
 #include <string>
 #include <vector>
-#if JUCE_MODULE_AVAILABLE_juce_opengl
-    #include <juce_opengl/juce_opengl.h>
-#endif
-#if JUCE_WINDOWS
-    #include <windows.h>
-#else
-    #include <sys/stat.h>
-    #include <unistd.h>
-#endif
 
 #ifndef MELATONIN_INSPECTOR_ENABLE_AUTOMATION
     #define MELATONIN_INSPECTOR_ENABLE_AUTOMATION 0
+#endif
+
+#if MELATONIN_INSPECTOR_ENABLE_AUTOMATION
+    #if JUCE_MODULE_AVAILABLE_juce_opengl
+        #include <juce_opengl/juce_opengl.h>
+    #endif
+    #if JUCE_WINDOWS
+        #include <windows.h>
+    #else
+        #include <sys/stat.h>
+        #include <unistd.h>
+    #endif
 #endif
 
 namespace melatonin
@@ -29,7 +32,7 @@ namespace melatonin
         bool advertise = true;
         bool allowInput = true;
         bool allowMutation = true;
-        bool allowFileWrite = true;
+        bool allowFileWrite = false;
         juce::File artifactRoot;
     };
 
@@ -283,7 +286,7 @@ namespace melatonin
                     return dispatch (method, params);
                 });
 
-            const auto deadline = juce::Time::currentTimeMillis() + juce::jlimit (0, 30000, getInt (params, "timeoutMs", 0));
+            const auto deadline = juce::Time::currentTimeMillis() + juce::jlimit (0, 30000, getInt (params, "timeoutMs", 5000));
             juce::var lastResult;
 
             do
@@ -790,7 +793,7 @@ namespace melatonin
 
         juce::var count (juce::DynamicObject& params)
         {
-            auto matchesOrError = resolveLocatorQuery (params, false, false);
+            auto matchesOrError = resolveLocatorQuery (params, false, false, false);
 
             if (isError (matchesOrError))
                 return matchesOrError;
@@ -909,6 +912,10 @@ namespace melatonin
                 return error ("screenshot_failed", "Screenshot clip is empty.");
 
             const auto scale = (float) getDouble (params, "scale", 1.0);
+
+            if (scale <= 0.0f || scale > 4.0f)
+                return error ("invalid_screenshot_scale", "Screenshot scale must be greater than 0 and no more than 4.");
+
             const auto source = getString (params, "source", "component");
 
             if (source != "auto" && source != "component" && source != "native")
@@ -962,7 +969,7 @@ namespace melatonin
                                     { "height", image.getHeight() },
                                     { "file", absolutePath } });
 
-            if (params.getProperty ("includeBase64").isVoid() || (bool) params.getProperty ("includeBase64"))
+            if ((bool) params.getProperty ("includeBase64"))
                 result.getDynamicObject()->setProperty ("base64", juce::Base64::toBase64 (pngBytes.getData(), pngBytes.getSize()));
 
             return result;
@@ -2037,7 +2044,10 @@ namespace melatonin
             return nullptr;
         }
 
-        juce::var resolveLocatorQuery (juce::DynamicObject& params, bool defaultVisible, bool requireStrict)
+        juce::var resolveLocatorQuery (juce::DynamicObject& params,
+                                       bool defaultVisible,
+                                       bool requireStrict,
+                                       bool refreshRefs = true)
         {
             if (root == nullptr)
                 return error ("no_root", "No root component is attached.");
@@ -2047,10 +2057,22 @@ namespace melatonin
             if (locatorObject == nullptr)
                 return error ("invalid_locator", "Locator must contain at least one field.");
 
+            auto previousRefs = refs;
+            const auto previousGeneration = generation;
+
             refs.clear();
-            ++generation;
+
+            if (refreshRefs)
+                ++generation;
 
             auto tree = serializeAutomationTree (64);
+
+            if (!refreshRefs)
+            {
+                refs = previousRefs;
+                generation = previousGeneration;
+            }
+
             juce::Array<juce::var> matches;
             collectLocatorMatches (matches, tree, *locatorObject, defaultVisible);
 
@@ -3235,23 +3257,20 @@ namespace melatonin
                 add ("click");
             }
 
-            if (className.contains ("ListBox") || role == "list" || role == "listItem")
+            if (className.contains ("ListBox") || role == "list")
             {
                 add ("select_option");
                 add ("click");
             }
+
+            if (role == "listItem")
+                add ("click");
 
             if (className.contains ("Viewport") || role == "scrollBar")
-            {
                 add ("wheel");
-                add ("scroll");
-            }
 
             if (role == "tree" || role == "treeItem" || className.contains ("TreeView"))
-            {
                 add ("click");
-                add ("select_option");
-            }
 
             if (role == "window" || role == "dialogWindow" || className.contains ("DocumentWindow") || className.contains ("AlertWindow"))
                 add ("snapshot");

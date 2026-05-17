@@ -86,17 +86,22 @@ namespace
         return bestMatch;
     }
 
-    juce::String readLine (juce::StreamingSocket& socket)
+    juce::String readLine (juce::StreamingSocket& socket, int timeoutMs)
     {
         std::string bytes;
         char buffer[1024] {};
+        const auto deadline = juce::Time::currentTimeMillis() + juce::jmax (1, timeoutMs);
 
-        for (;;)
+        while (juce::Time::currentTimeMillis() < deadline)
         {
-            const auto ready = socket.waitUntilReady (true, 5000);
+            const auto remaining = (int) (deadline - juce::Time::currentTimeMillis());
+            const auto ready = socket.waitUntilReady (true, juce::jlimit (1, 250, remaining));
 
-            if (ready <= 0)
+            if (ready < 0)
                 break;
+
+            if (ready == 0)
+                continue;
 
             const auto bytesRead = socket.read (buffer, (int) sizeof (buffer), false);
 
@@ -115,7 +120,53 @@ namespace
         return juce::String::fromUTF8 (bytes.data(), (int) bytes.size()).trim();
     }
 
-    juce::var request (juce::DynamicObject& session, const juce::String& method, juce::var params)
+    int responseTimeoutMs (const juce::String& method, const juce::var& params)
+    {
+        int endpointTimeoutMs = method == "wait" ? 250 : (method.startsWith ("wait_for") ? 5000 : 5000);
+
+        if (auto* object = params.getDynamicObject())
+        {
+            auto timeout = object->getProperty (method == "wait" ? "ms" : "timeoutMs");
+
+            if (!timeout.isVoid())
+                endpointTimeoutMs = (int) timeout;
+        }
+
+        return juce::jlimit (5000, 35000, endpointTimeoutMs + 2000);
+    }
+
+    juce::String endpointErrorMessage (juce::DynamicObject& responseObject)
+    {
+        auto* error = responseObject.getProperty ("error").getDynamicObject();
+        auto message = error != nullptr ? error->getProperty ("message").toString() : "Unknown automation error";
+
+        if (error != nullptr)
+        {
+            auto code = error->getProperty ("code").toString();
+
+            if (code.isNotEmpty())
+                message = code + ": " + message;
+
+            auto matchCount = error->getProperty ("matchCount");
+
+            if (!matchCount.isVoid())
+                message << "\nmatchCount=" << matchCount.toString();
+
+            auto matches = error->getProperty ("matches");
+
+            if (!matches.isVoid())
+                message << "\nmatches=" << juce::JSON::toString (matches, true);
+
+            auto suggested = error->getProperty ("suggestedNextCommand").toString();
+
+            if (suggested.isNotEmpty())
+                message << "\nsuggestedNextCommand=" << suggested;
+        }
+
+        return message;
+    }
+
+    juce::var requestEnvelope (juce::DynamicObject& session, const juce::String& method, juce::var params)
     {
         juce::StreamingSocket socket;
         const auto host = session.getProperty ("host").toString();
@@ -133,42 +184,25 @@ namespace
         auto payload = juce::JSON::toString (juce::var (requestObject), true) + "\n";
         socket.write (payload.toRawUTF8(), (int) payload.getNumBytesAsUTF8());
 
-        auto response = juce::JSON::parse (readLine (socket));
+        auto response = juce::JSON::parse (readLine (socket, responseTimeoutMs (method, params)));
+        auto* responseObject = response.getDynamicObject();
+
+        if (responseObject == nullptr)
+            throw std::runtime_error ("Timed out waiting for automation endpoint response");
+
+        return response;
+    }
+
+    juce::var request (juce::DynamicObject& session, const juce::String& method, juce::var params)
+    {
+        auto response = requestEnvelope (session, method, params);
         auto* responseObject = response.getDynamicObject();
 
         if (responseObject == nullptr)
             throw std::runtime_error ("Invalid response from automation endpoint");
 
         if (! (bool) responseObject->getProperty ("ok"))
-        {
-            auto* error = responseObject->getProperty ("error").getDynamicObject();
-            auto message = error != nullptr ? error->getProperty ("message").toString() : "Unknown automation error";
-
-            if (error != nullptr)
-            {
-                auto code = error->getProperty ("code").toString();
-
-                if (code.isNotEmpty())
-                    message = code + ": " + message;
-
-                auto matchCount = error->getProperty ("matchCount");
-
-                if (!matchCount.isVoid())
-                    message << "\nmatchCount=" << matchCount.toString();
-
-                auto matches = error->getProperty ("matches");
-
-                if (!matches.isVoid())
-                    message << "\nmatches=" << juce::JSON::toString (matches, true);
-
-                auto suggested = error->getProperty ("suggestedNextCommand").toString();
-
-                if (suggested.isNotEmpty())
-                    message << "\nsuggestedNextCommand=" << suggested;
-            }
-
-            throw std::runtime_error (message.toStdString());
-        }
+            throw std::runtime_error (endpointErrorMessage (*responseObject).toStdString());
 
         return responseObject->getProperty ("result");
     }
@@ -459,6 +493,15 @@ namespace
         return object ({ { "type", "boolean" } });
     }
 
+    juce::var valueSchema()
+    {
+        return object ({ { "anyOf", array ({ stringSchema(),
+                                             numberSchema(),
+                                             booleanSchema(),
+                                             object ({ { "type", "object" } }),
+                                             object ({ { "type", "array" } }) }) } });
+    }
+
     juce::var locatorSchema()
     {
         return object ({ { "type", "object" },
@@ -662,7 +705,7 @@ namespace
                                 { "h", numberSchema() } })),
             tool ("juce_set_property",
                   "Set a component property and return a fresh snapshot.",
-                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "name", stringSchema() }, { "value", emptyObject() } },
+                  toolSchema ({ { "session", stringSchema() }, { "ref", stringSchema() }, { "locator", locatorSchema() }, { "name", stringSchema() }, { "value", valueSchema() } },
                               { "name" })),
             tool ("juce_wait",
                   "Wait briefly and return a fresh snapshot.",
@@ -737,6 +780,13 @@ namespace
         return object ({ { "content", array ({ object ({ { "type", "text" }, { "text", text } }) }) } });
     }
 
+    juce::var mcpEndpointErrorContent (juce::DynamicObject& responseObject)
+    {
+        return object ({ { "isError", true },
+                         { "content", array ({ object ({ { "type", "text" },
+                                                          { "text", juce::JSON::toString (responseObject.getProperty ("error"), true) } }) }) } });
+    }
+
     juce::var callMcpTool (const juce::String& name, juce::var arguments)
     {
         if (!arguments.isObject())
@@ -788,7 +838,19 @@ namespace
                 args->setProperty ("mode", "interesting");
         }
 
-        auto result = request (*sessionObject, method, arguments);
+        if (name == "juce_screenshot" && args->getProperty ("includeBase64").isVoid())
+            args->setProperty ("includeBase64", true);
+
+        auto response = requestEnvelope (*sessionObject, method, arguments);
+        auto* responseObject = response.getDynamicObject();
+
+        if (responseObject == nullptr)
+            throw std::runtime_error ("Invalid response from automation endpoint");
+
+        if (! (bool) responseObject->getProperty ("ok"))
+            return mcpEndpointErrorContent (*responseObject);
+
+        auto result = responseObject->getProperty ("result");
 
         if (name == "juce_screenshot")
         {
@@ -954,7 +1016,7 @@ namespace
             << "  melatonin-ui -s <session> count [locator options]\n"
             << "  melatonin-ui -s <session> describe <ref>|[locator options] [--depth n] [--full|--interesting|--minimal]\n"
             << "  melatonin-ui -s <session> snapshot [--json|--format text|json] [--full|--interesting|--minimal] [--depth n] [--ref ref] [locator options]\n"
-            << "  melatonin-ui -s <session> screenshot [--target root|--ref m1-1] [--source auto|component|native] --file /tmp/root.png\n"
+            << "  melatonin-ui -s <session> screenshot [--target root|--ref m1-1] [--source auto|component|native] [--base64] --file /tmp/root.png\n"
             << "  melatonin-ui -s <session> click <ref> [--button left|right|middle] [--click-count n] [--position x,y]\n"
             << "  melatonin-ui -s <session> dblclick <ref>\n"
             << "  melatonin-ui -s <session> right-click <ref>\n"
@@ -983,7 +1045,8 @@ namespace
             << "  melatonin-ui -s <session> set-property <ref> <name> <value>\n"
             << "  melatonin-ui -s <session> wait --ms n\n"
             << "  melatonin-ui -s <session> wait-for-text <text> [--timeout-ms n]\n"
-            << "\nSnapshot defaults to a compact interesting tree. Use --full for the complete component dump.\n";
+            << "\nSnapshot defaults to a compact interesting tree. Use --full for the complete component dump.\n"
+            << "Screenshot base64 is off by default for CLI; use --base64 to include it.\n";
     }
 
     juce::String popFront (juce::StringArray& args)
@@ -1142,7 +1205,8 @@ int main (int argc, char* argv[])
             auto clipW = optionValue (args, "--clip-w");
             auto clipH = optionValue (args, "--clip-h");
             auto scale = optionValue (args, "--scale");
-            auto includeBase64 = !hasFlag (args, "--no-base64");
+            auto includeBase64 = hasFlag (args, "--base64");
+            includeBase64 = hasFlag (args, "--no-base64") ? false : includeBase64;
             auto locator = parseLocatorOptions (args);
             auto params = object ({ { "file", file }, { "ref", ref }, { "target", target } });
 

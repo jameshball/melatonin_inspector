@@ -381,6 +381,8 @@ namespace
             require (security.getProperty ("artifactRoot").toString() == screenshotDirectory.getFullPathName(),
                      "capabilities returned the wrong artifact root");
 
+            runCli ({ "-s", sessionName, "wait", "--ms", "5500" });
+
             auto windows = parseJsonOutput (runCli ({ "-s", sessionName, "windows" }), "windows");
             auto windowsArray = asObject (windows, "windows").getProperty ("windows");
             require (windowsArray.isArray() && windowsArray.getArray()->size() == 1, "windows should expose the owned root window");
@@ -494,6 +496,16 @@ namespace
             require ((int) asObject (countResult, "count result").getProperty ("count") == 2,
                      "count did not expose the duplicate button count");
 
+            auto refSnapshot = readSnapshot();
+            auto refBeforeCount = refByComponentName (refSnapshot, "nav.editor");
+            runCli ({ "-s", sessionName, "count", "--role", "button" });
+            runCli ({ "-s", sessionName, "click", refBeforeCount });
+            snapshot = readSnapshot();
+            require (!findByComponentName (snapshot, "editor.text").isVoid(),
+                     "count should not invalidate refs from the previous snapshot");
+            runCli ({ "-s", sessionName, "select-tab", "--component-name", "fixture.tabs", "--name", "Controls" });
+            snapshot = readSnapshot();
+
             auto scopedByLocator = parseJsonOutput (runCli ({ "-s", sessionName, "snapshot", "--json", "--component-id", "controls.slider" }), "scoped locator snapshot");
             require (asObject (asObject (scopedByLocator, "scoped snapshot").getProperty ("tree"), "scoped tree").getProperty ("componentName").toString() == "controls.slider",
                      "locator-scoped snapshot did not return the slider subtree");
@@ -546,6 +558,16 @@ namespace
             rootScreenshot = screenshotDirectory.getChildFile ("melatonin-automation-e2e-root.png");
             runCli ({ "-s", sessionName, "screenshot", "--target", "root", "--file", rootScreenshot.getFullPathName() });
             assertPng (rootScreenshot, "root screenshot");
+
+            auto screenshotMetadata = parseJsonOutput (runCli ({ "-s", sessionName, "screenshot", "--target", "root" }), "screenshot metadata");
+            require (asObject (screenshotMetadata, "screenshot metadata").getProperty ("base64").isVoid(),
+                     "CLI screenshot should omit base64 unless --base64 is passed");
+            auto screenshotWithBase64 = parseJsonOutput (runCli ({ "-s", sessionName, "screenshot", "--target", "root", "--base64" }), "screenshot base64");
+            require (asObject (screenshotWithBase64, "screenshot base64").getProperty ("base64").toString().isNotEmpty(),
+                     "CLI screenshot --base64 should include encoded PNG bytes");
+            auto invalidScaleOutput = runCliExpectFailure ({ "-s", sessionName, "screenshot", "--target", "root", "--scale", "0" });
+            require (invalidScaleOutput.contains ("invalid_screenshot_scale"),
+                     "invalid screenshot scale should fail clearly\n" + invalidScaleOutput);
 
             auto nativeRootScreenshot = screenshotDirectory.getChildFile ("melatonin-automation-e2e-root-native.png");
             runCli ({ "-s", sessionName, "screenshot", "--target", "root", "--source", "native", "--file", nativeRootScreenshot.getFullPathName(), "--no-base64" });
@@ -961,7 +983,8 @@ namespace
                 R"({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"juce_locator","arguments":{"session":"automation_fixture","locator":{"componentName":"controls.slider"}}}})",
                 R"({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"juce_snapshot","arguments":{"session":"automation_fixture","depth":12}}})",
                 R"({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"juce_count","arguments":{"session":"automation_fixture","locator":{"role":"button","name":"Duplicate"}}}})",
-                R"({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"juce_describe","arguments":{"session":"automation_fixture","locator":{"componentName":"controls.slider"}}}})"
+                R"({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"juce_describe","arguments":{"session":"automation_fixture","locator":{"componentName":"controls.slider"}}}})",
+                R"({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"juce_click","arguments":{"session":"automation_fixture","locator":{"componentName":"missing.button"},"timeoutMs":50}}})"
             });
 
             auto rawLines = juce::StringArray::fromLines (output);
@@ -971,7 +994,7 @@ namespace
                 if (line.trim().startsWithChar ('{'))
                     lines.add (line);
 
-            require (lines.size() >= 7, "MCP smoke expected at least 7 response lines, got " + juce::String (lines.size()) + "\n" + output);
+            require (lines.size() >= 8, "MCP smoke expected at least 8 response lines, got " + juce::String (lines.size()) + "\n" + output);
 
             auto initializeResult = assertMcpResult (parseMcpLine (lines, 0), 1);
             auto& initialize = asObject (initializeResult, "MCP initialize result");
@@ -1090,6 +1113,17 @@ namespace
                                     .getProperty ("text")
                                     .toString();
             require (describeText.contains ("set_value"), "MCP describe did not expose slider action hints\n" + describeText);
+
+            auto toolErrorResult = assertMcpResult (parseMcpLine (lines, 7), 8);
+            auto& toolErrorObject = asObject (toolErrorResult, "MCP endpoint error result");
+            require ((bool) toolErrorObject.getProperty ("isError"),
+                     "MCP endpoint errors should be tool results, not JSON-RPC errors");
+            auto toolErrorText = asObject (toolErrorObject.getProperty ("content").getArray()->getReference (0),
+                                           "MCP endpoint error content")
+                                     .getProperty ("text")
+                                     .toString();
+            require (toolErrorText.contains ("locator_not_found") || toolErrorText.contains ("operation_timeout"),
+                     "MCP endpoint error did not include structured compact context\n" + toolErrorText);
         }
 
         juce::var readSnapshot()

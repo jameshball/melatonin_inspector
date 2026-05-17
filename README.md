@@ -317,6 +317,14 @@ options.sessionName = "MyPlugin";
 inspector.enableAutomation (options);
 ```
 
+Endpoint-side file writes for screenshots and traces are disabled by default. Enable them explicitly before `enableAutomation()` with an artifact directory when you need file output:
+
+```cpp
+options.allowFileWrite = true;
+options.artifactRoot = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                           .getChildFile ("my-plugin-automation");
+```
+
 The endpoint advertises itself in your system temp directory and is controlled with the `melatonin-ui` CLI built by this repo's top-level CMake project:
 
 ```sh
