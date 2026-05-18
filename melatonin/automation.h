@@ -7,7 +7,13 @@
 #include <vector>
 
 #ifndef MELATONIN_INSPECTOR_ENABLE_AUTOMATION
-    #define MELATONIN_INSPECTOR_ENABLE_AUTOMATION 0
+    #if defined (JUCE_DEBUG) && JUCE_DEBUG
+        #define MELATONIN_INSPECTOR_ENABLE_AUTOMATION 1
+    #elif defined (DEBUG) || defined (_DEBUG)
+        #define MELATONIN_INSPECTOR_ENABLE_AUTOMATION 1
+    #else
+        #define MELATONIN_INSPECTOR_ENABLE_AUTOMATION 0
+    #endif
 #endif
 
 #if MELATONIN_INSPECTOR_ENABLE_AUTOMATION
@@ -223,14 +229,33 @@ namespace melatonin
             const auto payload = line + "\n";
             auto* data = payload.toRawUTF8();
             auto bytesRemaining = (int) payload.getNumBytesAsUTF8();
+            auto deadline = juce::Time::currentTimeMillis() + 30000;
+            auto noProgressCount = 0;
 
-            while (bytesRemaining > 0)
+            while (bytesRemaining > 0 && juce::Time::currentTimeMillis() < deadline)
             {
-                const auto bytesWritten = client.write (data, bytesRemaining);
+                const auto remaining = (int) (deadline - juce::Time::currentTimeMillis());
+                const auto ready = client.waitUntilReady (false, juce::jlimit (1, 500, remaining));
 
-                if (bytesWritten <= 0)
+                if (ready < 0)
                     break;
 
+                if (ready == 0)
+                    continue;
+
+                const auto bytesToWrite = juce::jmin (bytesRemaining, 16384);
+                const auto bytesWritten = client.write (data, bytesToWrite);
+
+                if (bytesWritten <= 0)
+                {
+                    if (++noProgressCount > 8)
+                        break;
+
+                    juce::Thread::sleep (1);
+                    continue;
+                }
+
+                noProgressCount = 0;
                 data += bytesWritten;
                 bytesRemaining -= bytesWritten;
             }
@@ -424,6 +449,8 @@ namespace melatonin
                    || method == "wheel"
                    || method == "drag_xy"
                    || method == "drag_to"
+                   || method == "drop"
+                   || method == "drop_files"
                    || method == "type"
                    || method == "fill"
                    || method == "clear"
@@ -518,6 +545,12 @@ namespace melatonin
 
             if (method == "drag_to")
                 return dragTo (params);
+
+            if (method == "drop")
+                return drop (params);
+
+            if (method == "drop_files")
+                return dropFiles (params);
 
             if (method == "type")
                 return typeText (params);
@@ -783,7 +816,7 @@ namespace melatonin
 
         juce::var locator (juce::DynamicObject& params)
         {
-            auto matchesOrError = resolveLocatorQuery (params, false, false);
+            auto matchesOrError = resolveLocatorQuery (params, true, false);
 
             if (isError (matchesOrError))
                 return matchesOrError;
@@ -793,7 +826,7 @@ namespace melatonin
 
         juce::var count (juce::DynamicObject& params)
         {
-            auto matchesOrError = resolveLocatorQuery (params, false, false, false);
+            auto matchesOrError = resolveLocatorQuery (params, true, false, false);
 
             if (isError (matchesOrError))
                 return matchesOrError;
@@ -804,7 +837,7 @@ namespace melatonin
 
         juce::var describe (juce::DynamicObject& params)
         {
-            auto resolution = resolveTarget (params, false, true);
+            auto resolution = resolveTarget (params, true, true);
 
             if (!resolution.error.isVoid())
                 return resolution.error;
@@ -872,7 +905,7 @@ namespace melatonin
 
             if (hasTargetSelector (params))
             {
-                auto resolution = resolveTarget (params, false, true);
+                auto resolution = resolveTarget (params, true, true);
 
                 if (!resolution.error.isVoid())
                     return resolution.error;
@@ -916,25 +949,43 @@ namespace melatonin
             if (scale <= 0.0f || scale > 4.0f)
                 return error ("invalid_screenshot_scale", "Screenshot scale must be greater than 0 and no more than 4.");
 
-            const auto source = getString (params, "source", "component");
+            const auto source = getString (params, "source", "auto");
 
             if (source != "auto" && source != "component" && source != "native")
                 return error ("invalid_screenshot_source", "Screenshot source must be auto, component, or native.");
 
             juce::String nativeFailure;
-            auto image = (source == "native" || (source == "auto" && target == root.getComponent()))
-                             ? createNativeScreenshot (*target, area, scale, nativeFailure)
-                             : juce::Image();
+            auto image = juce::Image();
+            auto capturedAllOpenGL = true;
+            auto sourceUsed = source == "auto" ? juce::String ("component") : source;
 
-            if (image.isNull() && source == "native")
+            if (source == "native")
+            {
+                image = createNativeScreenshot (*target, area, scale, nativeFailure);
+
+                if (image.isNull())
+                    return error ("screenshot_failed", nativeFailure.isNotEmpty() ? nativeFailure
+                                                                                  : juce::String ("Could not create native screenshot."));
+            }
+            else
+            {
+                image = createComponentScreenshot (*target, area, scale, capturedAllOpenGL);
+            }
+
+            if (source == "auto" && (image.isNull() || ! capturedAllOpenGL))
+            {
+                auto nativeImage = createNativeScreenshot (*target, area, scale, nativeFailure);
+
+                if (! nativeImage.isNull())
+                {
+                    image = nativeImage;
+                    sourceUsed = "native";
+                }
+            }
+
+            if (image.isNull())
                 return error ("screenshot_failed", nativeFailure.isNotEmpty() ? nativeFailure
-                                                                              : juce::String ("Could not create native screenshot."));
-
-            if (image.isNull())
-                image = createComponentScreenshot (*target, area, scale);
-
-            if (image.isNull())
-                return error ("screenshot_failed", "Could not create component snapshot.");
+                                                                              : juce::String ("Could not create screenshot."));
 
             juce::MemoryBlock pngBytes;
             juce::MemoryOutputStream stream (pngBytes, false);
@@ -967,6 +1018,8 @@ namespace melatonin
             auto result = object ({ { "mimeType", "image/png" },
                                     { "width", image.getWidth() },
                                     { "height", image.getHeight() },
+                                    { "source", sourceUsed },
+                                    { "capturedAllOpenGL", capturedAllOpenGL },
                                     { "file", absolutePath } });
 
             if ((bool) params.getProperty ("includeBase64"))
@@ -977,17 +1030,19 @@ namespace melatonin
 
         juce::Image createComponentScreenshot (juce::Component& target,
                                                juce::Rectangle<int> area,
-                                               float scale) const
+                                               float scale,
+                                               bool& capturedAllOpenGL) const
         {
             auto image = target.createComponentSnapshot (area, false, scale);
+            capturedAllOpenGL = true;
 
             if (!image.isNull())
-                compositeOpenGLComponents (target, area, scale, image);
+                capturedAllOpenGL = compositeOpenGLComponents (target, area, scale, image);
 
             return image;
         }
 
-        void compositeOpenGLComponents (juce::Component& target,
+        bool compositeOpenGLComponents (juce::Component& target,
                                         juce::Rectangle<int> area,
                                         float scale,
                                         juce::Image& image) const
@@ -996,9 +1051,10 @@ namespace melatonin
             collectOpenGLComponents (target, openGLComponents);
 
             if (openGLComponents.isEmpty())
-                return;
+                return true;
 
             juce::Graphics g (image);
+            auto capturedAllOpenGL = true;
 
             for (auto* component : openGLComponents)
             {
@@ -1014,7 +1070,10 @@ namespace melatonin
                 auto openGLImage = captureOpenGLFramebuffer (*component);
 
                 if (openGLImage.isNull())
+                {
+                    capturedAllOpenGL = false;
                     continue;
+                }
 
                 const auto drawBounds = juce::Rectangle<float> ((float) (componentBoundsInTarget.getX() - area.getX()) * scale,
                                                                 (float) (componentBoundsInTarget.getY() - area.getY()) * scale,
@@ -1032,6 +1091,8 @@ namespace melatonin
                 g.reduceClipRegion (clip);
                 g.drawImage (openGLImage, drawBounds);
             }
+
+            return capturedAllOpenGL;
         }
 
         static void collectOpenGLComponents (juce::Component& component, juce::Array<juce::Component*>& components)
@@ -1054,9 +1115,10 @@ namespace melatonin
             if (context == nullptr || !context->isAttached() || component.getWidth() <= 0 || component.getHeight() <= 0)
                 return {};
 
-            const auto renderScale = juce::jmax (1.0f, juce::Component::getApproximateScaleFactorForComponent (&component));
-            const auto width = juce::jmax (1, juce::roundToInt ((float) component.getWidth() * renderScale));
-            const auto height = juce::jmax (1, juce::roundToInt ((float) component.getHeight() * renderScale));
+            // The GL drawable can be Retina-scaled even when the component scale reports 1.0.
+            const auto renderScale = juce::jmax (1.0, context->getRenderingScale());
+            const auto width = juce::jmax (1, juce::roundToInt ((double) component.getWidth() * renderScale));
+            const auto height = juce::jmax (1, juce::roundToInt ((double) component.getHeight() * renderScale));
             std::vector<juce::uint8> rgba ((size_t) width * (size_t) height * 4u);
             std::atomic<bool> succeeded { false };
 
@@ -1067,13 +1129,33 @@ namespace melatonin
                 glGetIntegerv (GL_PACK_ALIGNMENT, &previousPackAlignment);
                 glPixelStorei (GL_PACK_ALIGNMENT, 1);
 
+                GLint previousFramebuffer = 0;
+                glGetIntegerv (GL_FRAMEBUFFER_BINDING, &previousFramebuffer);
+                glBindFramebuffer (GL_FRAMEBUFFER, activeContext.getFrameBufferID());
+
+                GLint previousViewport[4] {};
+                glGetIntegerv (GL_VIEWPORT, previousViewport);
+                glViewport (0, 0, width, height);
+
+                const auto previousScissorEnabled = glIsEnabled (GL_SCISSOR_TEST);
+                glDisable (GL_SCISSOR_TEST);
+
                #if ! JUCE_OPENGL_ES
                 GLint previousReadBuffer = GL_BACK;
                 glGetIntegerv (GL_READ_BUFFER, &previousReadBuffer);
+                GLint previousDrawBuffer = GL_BACK;
+                glGetIntegerv (GL_DRAW_BUFFER, &previousDrawBuffer);
 
-                const auto readBuffer = activeContext.getFrameBufferID() == 0 ? GL_FRONT : GL_COLOR_ATTACHMENT0;
+                const auto drawBuffer = activeContext.getFrameBufferID() == 0 ? (GLenum) GL_BACK : (GLenum) GL_COLOR_ATTACHMENT0;
+                const auto readBuffer = drawBuffer;
+                glDrawBuffer (drawBuffer);
                 glReadBuffer (readBuffer);
                #endif
+
+                // JUCE runs queued GL work before the next render callback, so render once here
+                // before reading from the back buffer.
+                if (auto* renderer = dynamic_cast<juce::OpenGLRenderer*> (&component))
+                    renderer->renderOpenGL();
 
                 glFinish();
                 glReadPixels (0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
@@ -1081,8 +1163,14 @@ namespace melatonin
 
                #if ! JUCE_OPENGL_ES
                 glReadBuffer ((GLenum) previousReadBuffer);
+                glDrawBuffer ((GLenum) previousDrawBuffer);
                #endif
 
+                if (previousScissorEnabled)
+                    glEnable (GL_SCISSOR_TEST);
+
+                glViewport (previousViewport[0], previousViewport[1], previousViewport[2], previousViewport[3]);
+                glBindFramebuffer (GL_FRAMEBUFFER, (GLuint) previousFramebuffer);
                 glPixelStorei (GL_PACK_ALIGNMENT, previousPackAlignment);
                 succeeded.store (readError == GL_NO_ERROR);
             }, true);
@@ -1149,7 +1237,31 @@ namespace melatonin
                 return {};
             }
 
-            auto crop = topLevel->getLocalArea (&target, area).getIntersection (nativeImage.getBounds());
+            auto crop = topLevel->getLocalArea (&target, area);
+
+            if (auto* peer = topLevel->getPeer())
+            {
+                auto windowFrame = peer->getBounds();
+
+                if (const auto frameSize = peer->getFrameSizeIfPresent())
+                    windowFrame = frameSize->addedTo (windowFrame);
+
+                if (! windowFrame.isEmpty())
+                {
+                    const auto globalArea = target.localAreaToGlobal (area);
+                    const auto scaleX = (double) nativeImage.getWidth() / (double) windowFrame.getWidth();
+                    const auto scaleY = (double) nativeImage.getHeight() / (double) windowFrame.getHeight();
+
+                    crop = juce::Rectangle<int> {
+                        juce::roundToInt ((double) (globalArea.getX() - windowFrame.getX()) * scaleX),
+                        juce::roundToInt ((double) (globalArea.getY() - windowFrame.getY()) * scaleY),
+                        juce::roundToInt ((double) globalArea.getWidth() * scaleX),
+                        juce::roundToInt ((double) globalArea.getHeight() * scaleY)
+                    };
+                }
+            }
+
+            crop = crop.getIntersection (nativeImage.getBounds());
 
             if (crop.isEmpty())
             {
@@ -1176,8 +1288,8 @@ namespace melatonin
             if (!options.allowFileWrite)
                 return error ("file_write_disabled", "Automation file output is disabled for this session.");
 
-            juce::File file (requestedPath);
             const auto hasArtifactRoot = options.artifactRoot.getFullPathName().isNotEmpty();
+            juce::File file;
 
             if (hasArtifactRoot)
             {
@@ -1185,9 +1297,18 @@ namespace melatonin
 
                 if (!juce::File::isAbsolutePath (requestedPath))
                     file = rootDirectory.getChildFile (requestedPath);
+                else
+                    file = juce::File (requestedPath);
 
                 if (!file.isAChildOf (rootDirectory))
                     return error ("artifact_path_denied", "Automation file output must stay within the artifact root.");
+            }
+            else
+            {
+                if (!juce::File::isAbsolutePath (requestedPath))
+                    return error ("invalid_file_path", "Automation file output requires an absolute path when no artifact root is configured.");
+
+                file = juce::File (requestedPath);
             }
 
             return file.getFullPathName();
@@ -1203,14 +1324,6 @@ namespace melatonin
             if (!resolution.error.isVoid())
                 return resolution.error;
 
-            auto* target = resolution.component;
-
-            if (auto validationError = validateInputTarget (*target, params); !validationError.isVoid())
-                return validationError;
-
-            if (isTrial (params))
-                return actionabilityResult (*target);
-
             const auto buttonName = getString (params, "button", "left");
             juce::ModifierKeys buttonModifiers;
 
@@ -1222,6 +1335,15 @@ namespace melatonin
             if (clickCount < 1)
                 return error ("invalid_click_count", "clickCount must be at least 1.");
 
+            auto* target = resolution.component;
+            const auto canUseSemanticClick = buttonName == "left" && clickCount == 1 && !hasClickPosition (params);
+            auto validationError = validateInputTarget (*target, params);
+            if (!validationError.isVoid())
+                return validationError;
+
+            if (isTrial (params))
+                return actionabilityResult (*target);
+
             juce::Point<float> localPoint;
 
             if (auto pointError = localClickPoint (*target, params, localPoint); !pointError.isVoid())
@@ -1229,16 +1351,21 @@ namespace melatonin
 
             if (auto* button = dynamic_cast<juce::Button*> (target))
             {
-                if (buttonName == "left" && clickCount == 1 && !hasClickPosition (params))
+                if (canUseSemanticClick)
                 {
                     button->triggerClick();
                     return snapshotAfterAction();
                 }
             }
 
-            if (buttonName == "left" && clickCount == 1 && !hasClickPosition (params))
-                if (invokeAccessibleTreeItemClick (*target))
+            if (canUseSemanticClick)
+            {
+                if (invokeAccessibleClick (*target))
+                {
                     return snapshotAfterAction();
+                }
+
+            }
 
             synthesizeComponentClick (*target, buttonModifiers, clickCount, localPoint);
             return snapshotAfterAction();
@@ -1294,6 +1421,27 @@ namespace melatonin
                 return actionabilityResult (*target);
 
             synthesizeComponentClick (*target, juce::ModifierKeys (juce::ModifierKeys::rightButtonModifier), 1, targetCentreLocal (*target));
+
+            const auto menuItem = getString (params, "menuItem", {});
+            if (menuItem.isNotEmpty())
+            {
+                auto* menuLocator = new juce::DynamicObject();
+                menuLocator->setProperty ("role", "menuItem");
+                menuLocator->setProperty ("name", menuItem);
+                menuLocator->setProperty ("exact", true);
+
+                juce::DynamicObject menuParams;
+                menuParams.setProperty ("locator", juce::var (menuLocator));
+                menuParams.setProperty ("force", true);
+
+                auto item = resolveTarget (menuParams, true, true);
+
+                if (!item.error.isVoid())
+                    return item.error;
+
+                synthesizeComponentClick (*item.component, juce::ModifierKeys(), 1, targetCentreLocal (*item.component));
+            }
+
             return snapshotAfterAction();
         }
 
@@ -1435,6 +1583,10 @@ namespace melatonin
             {
                 editor->insertTextAtCaret (text);
             }
+            else if (auto* codeEditor = dynamic_cast<juce::CodeEditorComponent*> (target))
+            {
+                codeEditor->insertTextAtCaret (text);
+            }
             else if (auto* label = dynamic_cast<juce::Label*> (target))
             {
                 label->setText (label->getText() + text, juce::sendNotification);
@@ -1460,7 +1612,7 @@ namespace melatonin
 
             auto* target = resolution.component;
 
-            if (auto validationError = validateInputTarget (*target, params); !validationError.isVoid())
+            if (auto validationError = validateInputTarget (*target, params, false); !validationError.isVoid())
                 return validationError;
 
             if (isTrial (params))
@@ -1471,6 +1623,12 @@ namespace melatonin
             if (auto* editor = dynamic_cast<juce::TextEditor*> (target))
             {
                 editor->setText (text, juce::sendNotification);
+                return snapshotAfterAction();
+            }
+
+            if (auto* codeEditor = dynamic_cast<juce::CodeEditorComponent*> (target))
+            {
+                codeEditor->loadContent (text);
                 return snapshotAfterAction();
             }
 
@@ -1495,7 +1653,7 @@ namespace melatonin
 
             auto* target = resolution.component;
 
-            if (auto validationError = validateInputTarget (*target, params); !validationError.isVoid())
+            if (auto validationError = validateInputTarget (*target, params, false); !validationError.isVoid())
                 return validationError;
 
             if (isTrial (params))
@@ -1504,6 +1662,12 @@ namespace melatonin
             if (auto* editor = dynamic_cast<juce::TextEditor*> (target))
             {
                 editor->clear();
+                return snapshotAfterAction();
+            }
+
+            if (auto* codeEditor = dynamic_cast<juce::CodeEditorComponent*> (target))
+            {
+                codeEditor->loadContent ({});
                 return snapshotAfterAction();
             }
 
@@ -1528,7 +1692,7 @@ namespace melatonin
 
             auto* target = resolution.component;
 
-            if (auto validationError = validateInputTarget (*target, params); !validationError.isVoid())
+            if (auto validationError = validateInputTarget (*target, params, false); !validationError.isVoid())
                 return validationError;
 
             if (isTrial (params))
@@ -1540,6 +1704,18 @@ namespace melatonin
                     return error ("target_not_toggleable", "Target button is not toggleable.");
 
                 button->setToggleState (shouldBeChecked, juce::sendNotification);
+                return snapshotAfterAction();
+            }
+
+            auto* handler = target->getAccessibilityHandler();
+            if (handler != nullptr && handler->getActions().contains (juce::AccessibilityActionType::toggle))
+            {
+                const auto state = handler->getCurrentState();
+                if (state.isChecked() != shouldBeChecked)
+                {
+                    handler->getActions().invoke (juce::AccessibilityActionType::toggle);
+                }
+
                 return snapshotAfterAction();
             }
 
@@ -1566,7 +1742,7 @@ namespace melatonin
 
             auto* target = resolution.component;
 
-            if (auto validationError = validateInputTarget (*target, params); !validationError.isVoid())
+            if (auto validationError = validateInputTarget (*target, params, false); !validationError.isVoid())
                 return validationError;
 
             if (isTrial (params))
@@ -1584,6 +1760,17 @@ namespace melatonin
                 return snapshotAfterAction();
             }
 
+            auto* handler = target->getAccessibilityHandler();
+            if (handler != nullptr)
+            {
+                auto* valueInterface = handler->getValueInterface();
+                if (valueInterface != nullptr && ! valueInterface->isReadOnly())
+                {
+                    valueInterface->setValueAsString (params.getProperty ("value").toString());
+                    return snapshotAfterAction();
+                }
+            }
+
             return error ("target_no_value", "Target component does not support semantic set_value.");
         }
 
@@ -1599,22 +1786,32 @@ namespace melatonin
 
             auto* target = resolution.component;
 
-            if (auto validationError = validateInputTarget (*target, params); !validationError.isVoid())
+            if (auto validationError = validateInputTarget (*target, params, false); !validationError.isVoid())
                 return validationError;
 
             if (isTrial (params))
                 return actionabilityResult (*target);
 
-            auto* combo = dynamic_cast<juce::ComboBox*> (target);
-
             auto text = getString (params, "text", {});
+
+            auto* handler = target->getAccessibilityHandler();
+            if (handler != nullptr && handler->getRole() == juce::AccessibilityRole::menuItem)
+            {
+                if (auto* menuBar = dynamic_cast<juce::MenuBarComponent*> (target->getParentComponent()))
+                    return selectMenuBarItem (*menuBar, params, text, handler->getTitle());
+            }
+
+            if (auto* menuBar = dynamic_cast<juce::MenuBarComponent*> (target))
+                return selectMenuBarItem (*menuBar, params, text, {});
+
+            auto* combo = dynamic_cast<juce::ComboBox*> (target);
 
             if (combo == nullptr)
             {
                 if (auto* listBox = dynamic_cast<juce::ListBox*> (target))
                     return selectListBoxRow (*listBox, params, text);
 
-                return error ("target_not_selectable", "Target component is not a ComboBox or ListBox.");
+                return error ("target_not_selectable", "Target component is not a ComboBox, ListBox, or MenuBarComponent.");
             }
 
             if (text.isNotEmpty())
@@ -1644,6 +1841,67 @@ namespace melatonin
             }
 
             return error ("invalid_option", "select_option requires text, index, or id.");
+        }
+
+        juce::var selectMenuBarItem (juce::MenuBarComponent& menuBar,
+                                     juce::DynamicObject& params,
+                                     const juce::String& text,
+                                     const juce::String& topLevelMenuFilter)
+        {
+            auto* model = menuBar.getModel();
+
+            if (model == nullptr)
+                return error ("target_not_selectable", "MenuBarComponent has no model.");
+
+            auto menuNames = model->getMenuBarNames();
+            int flatIndex = 0;
+            const auto exact = (bool) params.getProperty ("exact");
+
+            for (int menuIndex = 0; menuIndex < menuNames.size(); ++menuIndex)
+            {
+                const auto menuName = menuNames[menuIndex];
+
+                if (topLevelMenuFilter.isNotEmpty() && ! matchesString (menuName, topLevelMenuFilter, true))
+                    continue;
+
+                auto menu = model->getMenuForIndex (menuIndex, menuName);
+                juce::PopupMenu::MenuItemIterator iterator (menu, true);
+
+                while (iterator.next())
+                {
+                    auto& item = iterator.getItem();
+                    const auto selectable = ! item.isSeparator && ! item.isSectionHeader;
+
+                    if (!selectable)
+                        continue;
+
+                    auto matched = false;
+
+                    if (text.isNotEmpty())
+                        matched = matchesString (item.text, text, exact);
+                    else if (!params.getProperty ("index").isVoid())
+                        matched = flatIndex == (int) params.getProperty ("index");
+                    else if (!params.getProperty ("id").isVoid())
+                        matched = item.itemID == (int) params.getProperty ("id");
+
+                    if (matched)
+                    {
+                        if (! item.isEnabled)
+                            return error ("option_not_available", "Menu item is disabled: " + item.text);
+
+                        if (item.action)
+                            item.action();
+                        else if (item.itemID != 0)
+                            model->menuItemSelected (item.itemID, menuIndex);
+
+                        return snapshotAfterAction();
+                    }
+
+                    ++flatIndex;
+                }
+            }
+
+            return error ("option_not_found", "Menu item not found: " + text);
         }
 
         juce::var selectListBoxRow (juce::ListBox& listBox, juce::DynamicObject& params, const juce::String& text)
@@ -1844,7 +2102,15 @@ namespace melatonin
             if (isTrial (params))
                 return actionabilityResult (*target);
 
-            auto start = getRootBounds (*target).getCentre();
+            auto* coordinateRoot = coordinateRootFor (*target);
+            if (coordinateRoot == nullptr)
+                return error ("invalid_target", "Target has no coordinate root.");
+
+            juce::Point<float> localStart;
+            if (auto positionError = localClickPoint (*target, params, localStart); ! positionError.isVoid())
+                return positionError;
+
+            auto start = coordinateRoot->getLocalPoint (target, localStart.roundToInt());
             auto end = start.translated (getInt (params, "dx", 0), getInt (params, "dy", 0));
 
             synthesizeDragOn (*target, start, end, getDragSteps (params));
@@ -1904,6 +2170,164 @@ namespace melatonin
                               getDragSteps (params));
 
             return snapshotAfterAction();
+        }
+
+        juce::var drop (juce::DynamicObject& params)
+        {
+            if (!options.allowInput)
+                return error ("input_disabled", "Automation input is disabled for this session.");
+
+            auto target = resolveTarget (params, true, true);
+
+            if (!target.error.isVoid())
+                return target.error;
+
+            auto* targetComponent = target.component;
+
+            if (auto validationError = validateInputTarget (*targetComponent, params); !validationError.isVoid())
+                return validationError;
+
+            auto* dropTarget = dynamic_cast<juce::DragAndDropTarget*> (targetComponent);
+
+            if (dropTarget == nullptr)
+                return error ("invalid_drop_target", "Target component is not a juce::DragAndDropTarget.");
+
+            auto description = params.getProperty ("description");
+
+            if (description.isVoid())
+                return error ("invalid_drop_description", "drop requires a description.");
+
+            juce::Component* sourceComponent = targetComponent;
+            auto sourceParams = std::make_unique<juce::DynamicObject>();
+            const auto sourceRef = getString (params, "sourceRef", {});
+            auto sourceLocator = params.getProperty ("sourceLocator");
+
+            if (sourceRef.isNotEmpty())
+                sourceParams->setProperty ("ref", sourceRef);
+
+            if (sourceLocator.isObject())
+                sourceParams->setProperty ("locator", sourceLocator);
+
+            if (sourceRef.isNotEmpty() || sourceLocator.isObject())
+            {
+                auto source = resolveTarget (*sourceParams, true, true);
+
+                if (!source.error.isVoid())
+                    return source.error;
+
+                sourceComponent = source.component;
+            }
+
+            juce::Point<float> localPoint;
+
+            if (auto pointError = localClickPoint (*targetComponent, params, localPoint); !pointError.isVoid())
+                return pointError;
+
+            juce::DragAndDropTarget::SourceDetails details (description, sourceComponent, localPoint.roundToInt());
+
+            if (!dropTarget->isInterestedInDragSource (details))
+                return error ("drop_target_not_interested", "Target is not interested in this drag description.");
+
+            if (isTrial (params))
+                return actionabilityResult (*targetComponent);
+
+            dropTarget->itemDragEnter (details);
+            dropTarget->itemDragMove (details);
+            dropTarget->itemDropped (details);
+
+            return snapshotAfterAction();
+        }
+
+        juce::var dropFiles (juce::DynamicObject& params)
+        {
+            if (!options.allowInput)
+                return error ("input_disabled", "Automation input is disabled for this session.");
+
+            auto files = stringArrayFromVar (params.getProperty ("files"));
+
+            if (files.isEmpty())
+            {
+                const auto file = getString (params, "file", {});
+
+                if (file.isNotEmpty())
+                    files.add (file);
+            }
+
+            files.removeEmptyStrings();
+
+            if (files.isEmpty())
+                return error ("invalid_file_drop", "drop_files requires a file or files array.");
+
+            juce::Component* targetComponent = nullptr;
+
+            if (hasTargetSelector (params))
+            {
+                auto target = resolveTarget (params, true, true);
+
+                if (!target.error.isVoid())
+                    return target.error;
+
+                targetComponent = findFileDropTargetAtOrAbove (*target.component, files);
+            }
+            else if (root != nullptr)
+            {
+                targetComponent = findInterestedFileDropTarget (*root.getComponent(), files);
+            }
+
+            if (targetComponent == nullptr)
+                return error ("invalid_file_drop_target", "No juce::FileDragAndDropTarget was interested in these files.");
+
+            if (auto validationError = validateInputTarget (*targetComponent, params, false); !validationError.isVoid())
+                return validationError;
+
+            auto* dropTarget = dynamic_cast<juce::FileDragAndDropTarget*> (targetComponent);
+            jassert (dropTarget != nullptr);
+
+            juce::Point<float> localPoint;
+
+            if (auto pointError = localClickPoint (*targetComponent, params, localPoint); !pointError.isVoid())
+                return pointError;
+
+            const auto point = localPoint.roundToInt();
+
+            if (isTrial (params))
+                return object ({ { "files", stringArrayToVar (files) },
+                                 { "target", actionabilityResult (*targetComponent) } });
+
+            dropTarget->fileDragEnter (files, point.x, point.y);
+            dropTarget->fileDragMove (files, point.x, point.y);
+            dropTarget->filesDropped (files, point.x, point.y);
+            dropTarget->fileDragExit (files);
+
+            return snapshotAfterAction();
+        }
+
+        static juce::Component* findFileDropTargetAtOrAbove (juce::Component& component, const juce::StringArray& files)
+        {
+            for (auto* current = &component; current != nullptr; current = current->getParentComponent())
+            {
+                auto* dropTarget = dynamic_cast<juce::FileDragAndDropTarget*> (current);
+
+                if (dropTarget != nullptr && dropTarget->isInterestedInFileDrag (files))
+                    return current;
+            }
+
+            return nullptr;
+        }
+
+        static juce::Component* findInterestedFileDropTarget (juce::Component& component, const juce::StringArray& files)
+        {
+            if (auto* target = findFileDropTargetAtOrAbove (component, files))
+                return target;
+
+            for (int i = 0; i < component.getNumChildComponents(); ++i)
+            {
+                if (auto* child = component.getChildComponent (i))
+                    if (auto* target = findInterestedFileDropTarget (*child, files))
+                        return target;
+            }
+
+            return nullptr;
         }
 
         juce::var setBounds (juce::DynamicObject& params)
@@ -2033,6 +2457,7 @@ namespace melatonin
                                "nth",
                                "exact",
                                "visible",
+                               "accessible",
                                "enabled",
                                "focused",
                                "selected" })
@@ -2129,9 +2554,18 @@ namespace melatonin
                     collectLocatorMatches (matches, child, locatorObject, defaultVisible);
         }
 
-        bool matchesLocator (juce::DynamicObject& node, juce::DynamicObject& locatorObject, bool defaultVisible) const
+        static bool matchesLocator (juce::DynamicObject& node, juce::DynamicObject& locatorObject, bool defaultVisible)
         {
             const auto exact = (bool) locatorObject.getProperty ("exact");
+
+            if (!locatorObject.getProperty ("accessible").isVoid())
+            {
+                if (!matchesOptionalBool (node, locatorObject, "accessible", "accessible")) return false;
+            }
+            else if (!isLocatorExposedNode (node))
+            {
+                return false;
+            }
 
             if (!matchesOptionalString (node, locatorObject, "role", "role", exact)) return false;
             if (!matchesOptionalText (searchableName (node), locatorObject, "name", exact)) return false;
@@ -2348,6 +2782,9 @@ namespace melatonin
                                    "targetRef",
                                    "locator",
                                    "targetLocator",
+                                   "description",
+                                   "sourceRef",
+                                   "sourceLocator",
                                    "x",
                                    "y",
                                    "toX",
@@ -2355,9 +2792,11 @@ namespace melatonin
                                    "dx",
                                    "dy",
                                    "steps",
+                                   "position",
                                    "role",
                                    "name",
                                    "text",
+                                   "menuItem",
                                    "componentId",
                                    "componentName",
                                    "value",
@@ -2470,7 +2909,7 @@ namespace melatonin
             return root != nullptr ? root->getPeer() : nullptr;
         }
 
-        juce::var validateInputTarget (juce::Component& target, juce::DynamicObject& params) const
+        juce::var validateInputTarget (juce::Component& target, juce::DynamicObject& params, bool requirePointerEvents = true) const
         {
             if ((bool) params.getProperty ("force"))
                 return {};
@@ -2481,13 +2920,60 @@ namespace melatonin
             if (!target.isEnabled())
                 return error ("target_disabled", "Target component is disabled.");
 
+            scrollAncestorViewportsToReveal (target);
+
             if (getRootBounds (target).isEmpty())
                 return error ("target_empty_bounds", "Target component has empty bounds.");
 
-            if (!receivesEvents (target))
+            if (requirePointerEvents && !receivesEvents (target))
                 return error ("target_not_receiving_events", "Target component does not receive pointer events at its center.");
 
             return {};
+        }
+
+        void scrollAncestorViewportsToReveal (juce::Component& target) const
+        {
+            for (auto* parent = target.getParentComponent(); parent != nullptr; parent = parent->getParentComponent())
+            {
+                auto* viewport = dynamic_cast<juce::Viewport*> (parent);
+
+                if (viewport == nullptr)
+                    continue;
+
+                auto* viewedComponent = viewport->getViewedComponent();
+
+                if (viewedComponent == nullptr)
+                    continue;
+
+                if (viewedComponent != &target && !viewedComponent->isParentOf (&target))
+                    continue;
+
+                const auto targetBounds = viewedComponent->getLocalArea (&target, target.getLocalBounds());
+                const auto viewArea = viewport->getViewArea();
+
+                if (targetBounds.isEmpty() || viewArea.isEmpty())
+                    continue;
+
+                auto nextX = viewArea.getX();
+                auto nextY = viewArea.getY();
+                constexpr int margin = 4;
+
+                if (targetBounds.getX() < viewArea.getX())
+                    nextX = targetBounds.getX() - margin;
+                else if (targetBounds.getRight() > viewArea.getRight())
+                    nextX = targetBounds.getRight() - viewArea.getWidth() + margin;
+
+                if (targetBounds.getY() < viewArea.getY())
+                    nextY = targetBounds.getY() - margin;
+                else if (targetBounds.getBottom() > viewArea.getBottom())
+                    nextY = targetBounds.getBottom() - viewArea.getHeight() + margin;
+
+                nextX = juce::jlimit (0, juce::jmax (0, viewedComponent->getWidth() - viewArea.getWidth()), nextX);
+                nextY = juce::jlimit (0, juce::jmax (0, viewedComponent->getHeight() - viewArea.getHeight()), nextY);
+
+                if (nextX != viewArea.getX() || nextY != viewArea.getY())
+                    viewport->setViewPosition (nextX, nextY);
+            }
         }
 
         static bool isTrial (juce::DynamicObject& params)
@@ -2522,20 +3008,50 @@ namespace melatonin
             return found == &target || (found != nullptr && target.isParentOf (found));
         }
 
-        bool invokeAccessibleTreeItemClick (juce::Component& target) const
+        bool invokeAccessibleClick (juce::Component& target) const
         {
             auto* handler = target.getAccessibilityHandler();
 
-            if (handler == nullptr || handler->getRole() != juce::AccessibilityRole::treeItem)
+            if (handler == nullptr)
                 return false;
 
             auto& actions = handler->getActions();
 
-            if (!handler->getCurrentState().isSelected())
+            if (handler->getRole() == juce::AccessibilityRole::menuItem)
+            {
+                if (auto* menuBar = dynamic_cast<juce::MenuBarComponent*> (target.getParentComponent()))
+                {
+                    if (auto* model = menuBar->getModel())
+                    {
+                        auto menuNames = model->getMenuBarNames();
+                        const auto title = handler->getTitle();
+                        const auto index = menuNames.indexOf (title);
+
+                        if (index >= 0)
+                        {
+                            menuBar->showMenu (index);
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            if (handler->getRole() == juce::AccessibilityRole::treeItem && !handler->getCurrentState().isSelected())
                 actions.invoke (juce::AccessibilityActionType::toggle);
 
-            actions.invoke (juce::AccessibilityActionType::press);
-            return true;
+            if (actions.contains (juce::AccessibilityActionType::press))
+            {
+                actions.invoke (juce::AccessibilityActionType::press);
+                return true;
+            }
+
+            if (actions.contains (juce::AccessibilityActionType::toggle))
+            {
+                actions.invoke (juce::AccessibilityActionType::toggle);
+                return true;
+            }
+
+            return false;
         }
 
         static bool parseMouseButton (const juce::String& buttonName, juce::ModifierKeys& modifiers)
@@ -2670,6 +3186,52 @@ namespace melatonin
 
             if (coordinateRoot == nullptr)
                 return;
+
+            if (auto* peer = coordinateRoot->getPeer())
+            {
+                const auto toPeerPoint = [peer, coordinateRoot] (juce::Point<int> rootPoint)
+                {
+                    return peer->getComponent().getLocalPoint (coordinateRoot, rootPoint).toFloat();
+                };
+
+                auto now = juce::Time::currentTimeMillis();
+                auto downModifiers = juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier);
+
+                peer->handleMouseEvent (juce::MouseInputSource::InputSourceType::mouse,
+                                        toPeerPoint (rootStart),
+                                        juce::ModifierKeys(),
+                                        0.0f,
+                                        0.0f,
+                                        now);
+                peer->handleMouseEvent (juce::MouseInputSource::InputSourceType::mouse,
+                                        toPeerPoint (rootStart),
+                                        downModifiers,
+                                        1.0f,
+                                        0.0f,
+                                        now + 1);
+
+                for (int i = 1; i <= steps; ++i)
+                {
+                    juce::Point<int> point {
+                        rootStart.x + (rootEnd.x - rootStart.x) * i / steps,
+                        rootStart.y + (rootEnd.y - rootStart.y) * i / steps
+                    };
+                    peer->handleMouseEvent (juce::MouseInputSource::InputSourceType::mouse,
+                                            toPeerPoint (point),
+                                            downModifiers,
+                                            1.0f,
+                                            0.0f,
+                                            now + 16 * i);
+                }
+
+                peer->handleMouseEvent (juce::MouseInputSource::InputSourceType::mouse,
+                                        toPeerPoint (rootEnd),
+                                        juce::ModifierKeys(),
+                                        0.0f,
+                                        0.0f,
+                                        now + 16 * steps + 1);
+                return;
+            }
 
             auto start = target.getLocalPoint (coordinateRoot, rootStart).toFloat();
             auto source = juce::Desktop::getInstance().getMainMouseSource();
@@ -3002,6 +3564,7 @@ namespace melatonin
                                "componentId",
                                "componentName",
                                "class",
+                               "accessible",
                                "role",
                                "title",
                                "value",
@@ -3090,6 +3653,9 @@ namespace melatonin
 
         static bool isInterestingNode (juce::DynamicObject& node)
         {
+            if (!isLocatorExposedNode (node) && !isSemanticContainer (node))
+                return false;
+
             if (hasMeaningfulState (node) || isActionableNode (node) || isSemanticContainer (node))
                 return true;
 
@@ -3102,6 +3668,33 @@ namespace melatonin
                 return true;
 
             return false;
+        }
+
+        static bool isAccessibleNode (juce::DynamicObject& node)
+        {
+            auto accessible = node.getProperty ("accessible");
+            return accessible.isVoid() || (bool) accessible;
+        }
+
+        static bool isLocatorExposedNode (juce::DynamicObject& node)
+        {
+            if (isAccessibleNode (node))
+                return true;
+
+            if (hasMeaningfulIdentifier (node))
+                return true;
+
+            const auto className = node.getProperty ("class").toString();
+            return className.contains ("Button")
+                   || className.contains ("Slider")
+                   || className.contains ("TextEditor")
+                   || className.contains ("CodeEditor")
+                   || className.contains ("ComboBox")
+                   || className.contains ("ListBox")
+                   || className.contains ("TreeView")
+                   || className.contains ("Viewport")
+                   || className.contains ("DocumentWindow")
+                   || className.contains ("AlertWindow");
         }
 
         static bool hasMeaningfulIdentifier (juce::DynamicObject& node)
@@ -3158,6 +3751,9 @@ namespace melatonin
 
         static bool isActionableNode (juce::DynamicObject& node)
         {
+            if (!isLocatorExposedNode (node))
+                return false;
+
             const auto role = node.getProperty ("role").toString();
             const auto className = node.getProperty ("class").toString();
 
@@ -3179,6 +3775,7 @@ namespace melatonin
             return className.contains ("Button")
                    || className.contains ("Slider")
                    || className.contains ("TextEditor")
+                   || className.contains ("CodeEditor")
                    || className.contains ("ComboBox")
                    || className.contains ("TabbedComponent")
                    || className.contains ("Viewport")
@@ -3215,7 +3812,7 @@ namespace melatonin
             const auto className = node.getProperty ("class").toString();
             const auto enabled = node.getProperty ("enabled").isVoid() || (bool) node.getProperty ("enabled");
 
-            if (!enabled)
+            if (!enabled || !isLocatorExposedNode (node))
                 return stringArrayToVar (actions);
 
             auto add = [&actions] (const juce::String& action) {
@@ -3238,9 +3835,10 @@ namespace melatonin
                 add ("drag");
             }
 
-            if (role == "editableText" || className.contains ("TextEditor") || (bool) node.getProperty ("editable"))
+            if (role == "editableText" || className.contains ("TextEditor") || className.contains ("CodeEditor") || (bool) node.getProperty ("editable"))
             {
                 add ("fill");
+                add ("clear");
                 add ("press");
                 add ("click");
             }
@@ -3261,6 +3859,12 @@ namespace melatonin
             {
                 add ("select_option");
                 add ("click");
+            }
+
+            if (role == "menuItem")
+            {
+                add ("click");
+                add ("select_option");
             }
 
             if (role == "listItem")
@@ -3288,7 +3892,7 @@ namespace melatonin
             if (object == nullptr)
                 return;
 
-            if (matchesLocatorNode (*object, locatorObject, defaultVisible))
+            if (matchesLocator (*object, locatorObject, defaultVisible))
                 matches.add (node);
 
             auto children = object->getProperty ("children");
@@ -3296,37 +3900,6 @@ namespace melatonin
             if (children.isArray())
                 for (auto& child : *children.getArray())
                     collectLocatorMatchNodes (matches, child, locatorObject, defaultVisible);
-        }
-
-        static bool matchesLocatorNode (juce::DynamicObject& node, juce::DynamicObject& locatorObject, bool defaultVisible)
-        {
-            const auto exact = (bool) locatorObject.getProperty ("exact");
-
-            if (!matchesOptionalString (node, locatorObject, "role", "role", exact)) return false;
-            if (!matchesOptionalText (searchableName (node), locatorObject, "name", exact)) return false;
-            if (!matchesOptionalText (searchableText (node), locatorObject, "text", exact)) return false;
-            if (!matchesOptionalString (node, locatorObject, "componentId", "componentId", true)) return false;
-            if (!matchesOptionalString (node, locatorObject, "componentId", "testId", true)) return false;
-            if (!matchesOptionalString (node, locatorObject, "componentName", "componentName", true)) return false;
-            if (!matchesOptionalString (node, locatorObject, "class", "class", exact)) return false;
-            if (!matchesOptionalString (node, locatorObject, "value", "value", exact)) return false;
-            if (!matchesOptionalText (searchableText (node), locatorObject, "hasText", exact)) return false;
-
-            if (!matchesOptionalBool (node, locatorObject, "enabled", "enabled")) return false;
-            if (!matchesOptionalBool (node, locatorObject, "focused", "focused")) return false;
-            if (!matchesOptionalBool (node, locatorObject, "selected", "selected")) return false;
-
-            if (!locatorObject.getProperty ("visible").isVoid())
-            {
-                if (!matchesOptionalBool (node, locatorObject, "visible", "visible"))
-                    return false;
-            }
-            else if (defaultVisible && !(bool) node.getProperty ("visible"))
-            {
-                return false;
-            }
-
-            return true;
         }
 
         static juce::var summarizeNodesForContext (const juce::Array<juce::var>& nodes)
@@ -3432,6 +4005,7 @@ namespace melatonin
             node->setProperty ("class", "melatonin::AutomationWindows");
             node->setProperty ("enabled", true);
             node->setProperty ("visible", true);
+            node->setProperty ("accessible", true);
             node->setProperty ("focused", false);
             node->setProperty ("bounds", rectangleToVar ({ 0, 0, 0, 0 }));
             node->setProperty ("screenBounds", rectangleToVar ({ 0, 0, 0, 0 }));
@@ -3461,6 +4035,7 @@ namespace melatonin
             node->setProperty ("enabled", component.isEnabled());
             const auto bounds = getRootBounds (component);
             node->setProperty ("visible", component.isShowing() && !bounds.isEmpty());
+            node->setProperty ("accessible", component.isAccessible());
             node->setProperty ("focused", component.hasKeyboardFocus (false));
             node->setProperty ("bounds", rectangleToVar (bounds));
             node->setProperty ("screenBounds", rectangleToVar (component.getScreenBounds()));
@@ -3496,6 +4071,13 @@ namespace melatonin
                 node->setProperty ("value", editor->getText());
             }
 
+            if (auto* codeEditor = dynamic_cast<juce::CodeEditorComponent*> (&component))
+            {
+                node->setProperty ("editable", ! codeEditor->isReadOnly());
+                node->setProperty ("readOnly", codeEditor->isReadOnly());
+                node->setProperty ("value", codeEditor->getDocument().getAllContent());
+            }
+
             if (auto* label = dynamic_cast<juce::Label*> (&component))
             {
                 node->setProperty ("editable", label->isEditable());
@@ -3518,6 +4100,14 @@ namespace melatonin
                 node->setProperty ("selectedId", combo->getSelectedId());
                 node->setProperty ("selectedText", combo->getText());
                 node->setProperty ("options", comboOptionsToVar (*combo));
+            }
+
+            if (auto* menuBar = dynamic_cast<juce::MenuBarComponent*> (&component))
+            {
+                if (auto* model = menuBar->getModel())
+                    node->setProperty ("menus", stringArrayToVar (model->getMenuBarNames()));
+
+                node->setProperty ("options", menuBarItemsToVar (*menuBar));
             }
 
             if (auto* tabs = dynamic_cast<juce::TabbedComponent*> (&component))
@@ -3584,6 +4174,23 @@ namespace melatonin
             return result;
         }
 
+        static juce::StringArray stringArrayFromVar (const juce::var& value)
+        {
+            juce::StringArray result;
+
+            if (value.isArray())
+            {
+                for (const auto& item : *value.getArray())
+                    result.add (item.toString());
+            }
+            else if (!value.isVoid())
+            {
+                result.add (value.toString());
+            }
+
+            return result;
+        }
+
         static juce::var comboOptionsToVar (juce::ComboBox& combo)
         {
             juce::Array<juce::var> result;
@@ -3592,6 +4199,47 @@ namespace melatonin
                 result.add (object ({ { "index", i },
                                       { "id", combo.getItemId (i) },
                                       { "text", combo.getItemText (i) } }));
+
+            return result;
+        }
+
+        static juce::var menuBarItemsToVar (juce::MenuBarComponent& menuBar)
+        {
+            juce::Array<juce::var> result;
+            auto* model = menuBar.getModel();
+
+            if (model == nullptr)
+                return result;
+
+            auto menuNames = model->getMenuBarNames();
+            int flatIndex = 0;
+
+            for (int menuIndex = 0; menuIndex < menuNames.size(); ++menuIndex)
+            {
+                const auto menuName = menuNames[menuIndex];
+                auto menu = model->getMenuForIndex (menuIndex, menuName);
+                juce::PopupMenu::MenuItemIterator iterator (menu, true);
+
+                while (iterator.next())
+                {
+                    auto& item = iterator.getItem();
+
+                    if (item.isSeparator || item.isSectionHeader)
+                        continue;
+
+                    result.add (object ({ { "index", flatIndex },
+                                          { "id", item.itemID },
+                                          { "menu", menuName },
+                                          { "text", item.text },
+                                          { "enabled", item.isEnabled },
+                                          { "checked", item.isTicked },
+                                          { "separator", item.isSeparator },
+                                          { "sectionHeader", item.isSectionHeader },
+                                          { "hasSubMenu", item.subMenu != nullptr } }));
+
+                    ++flatIndex;
+                }
+            }
 
             return result;
         }
@@ -3782,6 +4430,7 @@ namespace melatonin
                                "class",
                                "enabled",
                                "visible",
+                               "accessible",
                                "focused",
                                "role",
                                "title",

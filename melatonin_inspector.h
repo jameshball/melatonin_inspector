@@ -132,6 +132,40 @@ namespace melatonin
 #endif
         }
 
+        bool enableAutomationFromEnvironment (const juce::String& defaultSessionName, const juce::String& extraTriggerEnvironmentVariable = {})
+        {
+#if MELATONIN_INSPECTOR_ENABLE_AUTOMATION
+            const auto genericTrigger = juce::SystemStats::getEnvironmentVariable ("MELATONIN_INSPECTOR_AUTOMATION", juce::String());
+            const auto extraTrigger = extraTriggerEnvironmentVariable.isNotEmpty()
+                                          ? juce::SystemStats::getEnvironmentVariable (extraTriggerEnvironmentVariable, juce::String())
+                                          : juce::String();
+
+            if (genericTrigger.isEmpty() && extraTrigger.isEmpty())
+                return false;
+
+            const auto sessionName = juce::SystemStats::getEnvironmentVariable ("MELATONIN_INSPECTOR_SESSION", defaultSessionName);
+            const auto artifactRootPath = juce::SystemStats::getEnvironmentVariable ("MELATONIN_INSPECTOR_ARTIFACT_ROOT", juce::String());
+
+            AutomationOptions options;
+            options.sessionName = sessionName;
+            options.allowFileWrite = true;
+            options.artifactRoot = artifactRootPath.isNotEmpty()
+                                       ? juce::File::createFileWithoutCheckingPath (artifactRootPath)
+                                       : juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile (sessionName + "-melatonin-automation");
+            options.artifactRoot.createDirectory();
+            enableAutomation (std::move (options));
+
+            const auto running = automation != nullptr && automation->isRunning();
+            if (! running)
+                juce::Logger::writeToLog ("melatonin_inspector automation was requested but the automation server did not start");
+
+            return running;
+#else
+            juce::ignoreUnused (defaultSessionName, extraTriggerEnvironmentVariable);
+            return false;
+#endif
+        }
+
         void disableAutomation()
         {
 #if MELATONIN_INSPECTOR_ENABLE_AUTOMATION
